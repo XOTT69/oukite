@@ -62,7 +62,7 @@ async function accountDevices(token) {
   const raw = await cloudGet("/v2/binding/enduserapi/userDeviceList?pageNumber=1&pageSize=50", token);
   const list = raw?.data?.list;
   if (!Array.isArray(list)) throw new CloudError("Не вдалося отримати список станцій.", 502);
-  return list.map(item => ({productKey: String(item.productKey || ""), deviceKey: String(item.deviceKey || ""), deviceName: String(item.deviceName || ""), productName: String(item.productName || ""), online: Boolean(item.online)})).filter(item => item.productKey && item.deviceKey);
+  return list.map(item => ({productKey: String(item.productKey || ""), deviceKey: String(item.deviceKey || ""), deviceName: String(item.deviceName || ""), productName: String(item.productName || ""), online: item.online === true || Number(item.online) === 1})).filter(item => item.productKey && item.deviceKey);
 }
 async function allowedDevice(url, token) {
   const productKey = url.searchParams.get("pk"), deviceKey = url.searchParams.get("dk");
