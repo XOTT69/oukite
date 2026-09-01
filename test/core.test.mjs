@@ -23,3 +23,11 @@ test("planner reserve and flow state remain understandable", () => {
   assert.deepEqual(flowSummary(400, 80), {kind:"charging",net:320,title:"Станція заряджається",detail:"+320 W у батарею"});
   assert.equal(historyStats([{soc:80,input:50,output:10},{soc:75,input:100,output:300}]).socChange, -5);
 });
+
+test("telemetry preserves false output states and chart statistics handle empty data", () => {
+  const state = mapAttrs({data:{customizeTslInfo:[
+    {abId:43,resourceValce:"0"}, {abId:44,resourceValce:1}, {abId:46,resourceValce:"false"}
+  ]}}, {ac:true,usb:false,dc:true});
+  assert.deepEqual(state, {ac:false,usb:true,dc:false});
+  assert.deepEqual(historyStats([]), {peakInput:0,peakOutput:0,socChange:null});
+});
