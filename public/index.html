@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1020">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="OUKITEL Home">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="stylesheet" href="/styles.css">
+  <title>OUKITEL Home</title>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div><div class="eyebrow">OUKITEL P2001E PLUS</div><h1>OUKITEL Home</h1></div>
+      <button id="settingsBtn" class="icon-btn" aria-label="Налаштування">⚙︎</button>
+    </header>
+    <section id="banner" class="banner hidden" role="status"></section>
+    <section class="hero card">
+      <div class="battery-ring" id="batteryRing"><div class="battery-inner"><strong id="soc">89%</strong><span id="energy">≈ 1.82 kWh</span></div></div>
+      <div class="hero-meta"><div class="status-pill"><span class="dot" id="statusDot"></span><span id="statusText">Демо</span></div><div class="metric"><span>Температура</span><strong id="temperature">28°C</strong></div><div class="metric"><span>Автономність</span><strong id="remaining">—</strong></div></div>
+    </section>
+    <section class="power-grid"><article class="card power-card"><span>Вхід</span><strong><b id="inputW">0</b> W</strong><small>AC <span id="acInputW">0</span> W · DC/Solar <span id="dcInputW">0</span> W</small></article><article class="card power-card"><span>Вихід</span><strong><b id="outputW">0</b> W</strong><small>Поточне навантаження</small></article></section>
+    <section class="card controls"><div class="section-head"><div><span class="eyebrow">КЕРУВАННЯ</span><h2>Виходи</h2></div><span id="controlMode" class="mini-badge">демо</span></div><div class="control-row"><button class="toggle" data-key="ac" disabled><span>AC</span><i></i></button><button class="toggle" data-key="usb" disabled><span>USB</span><i></i></button><button class="toggle" data-key="dc" disabled><span>DC</span><i></i></button></div><p class="hint">У цій версії перемикачі навмисно read-only. Cloud write API не верифікований; локальне керування потребує окремого LAN bridge.</p></section>
+    <section class="card budget"><div class="section-head"><div><span class="eyebrow">ЕНЕРГОБЮДЖЕТ</span><h2>На скільки вистачить</h2></div></div><label>Очікуване навантаження <b><span id="budgetWLabel">350</span> W</b></label><input id="budgetW" type="range" min="50" max="2000" step="10" value="350"><div class="budget-result"><span>Орієнтовно</span><strong id="budgetTime">—</strong></div><small>2048 Wh, резерв 8%, орієнтовна ефективність AC 88%.</small></section>
+    <section class="card device"><div class="section-head"><div><span class="eyebrow">СТАНЦІЯ</span><h2 id="deviceName">Не вибрано</h2></div></div><div class="list"><div><span>Product key</span><strong id="productKey">—</strong></div><div><span>Частота</span><strong id="frequency">—</strong></div><div><span>Напруга</span><strong id="voltage">—</strong></div><div><span>Ліміт AC зарядки</span><strong id="chargeLimit">—</strong></div><div><span>Inverter</span><strong id="inverter">—</strong></div><div><span>BMS</span><strong id="bms">—</strong></div></div></section>
+    <footer><span id="updated">Оновлено: демо</span><button id="refreshBtn">Оновити</button></footer>
+  </main>
+  <dialog id="settingsDialog"><form method="dialog" class="settings-panel"><div class="section-head"><div><span class="eyebrow">ПІДКЛЮЧЕННЯ</span><h2>Налаштування</h2></div><button class="icon-btn" value="cancel" aria-label="Закрити">✕</button></div><label>Режим<select id="modeSelect"><option value="demo">Демо</option><option value="cloud">Acceleronix Cloud (read-only)</option></select></label><div id="loginFields"><label>Email Wonderfree<input id="email" type="email" autocomplete="username" placeholder="you@example.com"></label><label>Пароль Wonderfree<input id="password" type="password" autocomplete="current-password" placeholder="Не зберігається"></label><button type="button" class="primary" id="loginBtn">Увійти</button></div><label>Станція<select id="deviceSelect" disabled><option>Спершу увійдіть</option></select></label><div class="privacy-note">Застосунок працює на тому самому домені, що й Worker. Пароль і cloud token не зберігаються в браузері.</div><div id="loginStatus" class="login-status" role="status"></div><button type="button" class="secondary" id="saveBtn">Зберегти вибір</button><button type="button" class="danger" id="logoutBtn">Вийти та стерти сесію</button></form></dialog>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
+

@@ -1,0 +1,11 @@
+name = "oukitel-home"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "e37cddc68d094b5797123329d380cfa0"

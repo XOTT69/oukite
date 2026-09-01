@@ -1,0 +1,9 @@
+{
+  "name": "oukitel-home-pwa",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "check": "node --check worker.js && node --check public/app.js && node --check public/core.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}
