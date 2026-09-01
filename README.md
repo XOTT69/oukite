@@ -20,14 +20,12 @@ Safari PWA не може відкривати UDP `6606` або TCP `6607`, то
 
 PWA та Worker мають бути розгорнуті **на одному Cloudflare-домені**: так браузер отримує захищену cookie-сесію без CORS і без cloud-токена у `localStorage`.
 
-1. У Cloudflare створіть KV namespace `oukitel-sessions`.
-2. Впишіть його ID замість `REPLACE_WITH_YOUR_KV_NAMESPACE_ID` у [wrangler.toml](wrangler.toml).
-3. Створіть Worker через Git integration або `wrangler deploy` — Worker сам віддає файли з `public/`.
-4. Відкрийте його URL, увійдіть у Wonderfree та оберіть станцію.
+1. KV namespace `oukitel-home-sessions` уже прив'язаний у [wrangler.toml](wrangler.toml).
+2. Запустіть `wrangler deploy` — Worker сам віддає файли з `public/`.
+3. Відкрийте його URL, увійдіть у Wonderfree та оберіть станцію.
 
 Для локальної перевірки коду: `npm test` і `npm run check`.
 
 ## Безпека
 
 Пароль використовується лише в POST `/api/login` через HTTPS та не пишеться у браузерне сховище. Cloud token залишається в Cloudflare KV максимум 12 годин. Vendor `appSecret` у `worker.js` — не секрет користувача: це параметр мобільного застосунку, необхідний для відтворення протоколу входу.
-
