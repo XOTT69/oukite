@@ -1,94 +1,43 @@
-import {calcBudget, calcEnergy, fmtMin, mapAttrs} from "/core.mjs";
+import {calcBudgetWithReserve, calcEnergy, flowSummary, fmtMin, freshLabel, historyStats, mapAttrs} from "/core.mjs";
 
 const $ = id => document.getElementById(id);
-const DEMO = {soc: 89, temp: 28, remain: 3180, input: 0, output: 0, acInput: 0, dcInput: 0, ac: true, usb: false, dc: false, frequency: 50, voltage: 230, chargeLimit: 100, inverter: 106, bms: 115, updated: new Date()};
-let state = {...DEMO};
-let settings = JSON.parse(localStorage.getItem("oukitel_ui") || '{"mode":"demo","device":null}');
-let devices = [];
-
-function saveUi() { localStorage.setItem("oukitel_ui", JSON.stringify(settings)); }
-function setBanner(message = "") { $("banner").textContent = message; $("banner").classList.toggle("hidden", !message); }
-function selectedDevice() { return settings.device && devices.find(d => d.productKey === settings.device.productKey && d.deviceKey === settings.device.deviceKey) || settings.device; }
-function render() {
-  const device = selectedDevice();
-  $("soc").textContent = `${Math.round(state.soc ?? 0)}%`;
-  $("energy").textContent = `≈ ${(calcEnergy(state.soc) / 1000).toFixed(2)} kWh`;
-  $("temperature").textContent = state.temp == null ? "—" : `${state.temp}°C`;
-  $("remaining").textContent = fmtMin(state.remain);
-  for (const [element, value] of Object.entries({inputW: state.input, outputW: state.output, acInputW: state.acInput, dcInputW: state.dcInput})) $(element).textContent = Math.round(value || 0);
-  $("frequency").textContent = state.frequency == null ? "—" : `${state.frequency} Hz`;
-  $("voltage").textContent = state.voltage == null ? "—" : `${state.voltage} V`;
-  $("chargeLimit").textContent = state.chargeLimit == null ? "—" : `${state.chargeLimit}%`;
-  $("inverter").textContent = state.inverter ?? "—"; $("bms").textContent = state.bms ?? "—";
-  $("productKey").textContent = device?.productKey || "—";
-  $("deviceName").textContent = device?.deviceName || "Не вибрано";
-  $("batteryRing").style.background = `conic-gradient(var(--cyan) 0 ${Math.max(0, Math.min(100, state.soc || 0))}%, #26314a ${Math.max(0, Math.min(100, state.soc || 0))}% 100%)`;
-  const live = settings.mode === "cloud" && !!device;
-  $("controlMode").textContent = live ? "LIVE / read" : "демо";
-  $("statusText").textContent = live ? "Acceleronix Cloud" : "Демо";
-  $("statusDot").classList.toggle("live", live);
-  $("updated").textContent = `Оновлено: ${(state.updated || new Date()).toLocaleTimeString("uk-UA", {hour:"2-digit", minute:"2-digit"})}`;
-  const watts = Number($("budgetW").value); $("budgetWLabel").textContent = watts; $("budgetTime").textContent = fmtMin(calcBudget(watts, state.soc));
+const DEMO = {soc:89,temp:28,remain:3180,input:0,output:0,acInput:0,dcInput:0,ac:true,usb:false,dc:false,frequency:50,voltage:230,chargeLimit:100,inverter:106,bms:115,updated:new Date()};
+const PRESETS = [["Wi‑Fi роутер",15,"⌁"],["Ноутбук",65,"▣"],["Освітлення",40,"✦"],["Холодильник",100,"❄"],["Телевізор",90,"▤"],["Котел",120,"♨"]];
+let state={...DEMO}, devices=[], settings=JSON.parse(localStorage.getItem("oukitel_ui")||'{"mode":"demo","device":null,"reserve":8,"loads":[]}');
+let history=JSON.parse(localStorage.getItem("oukitel_history")||"[]"), activity=JSON.parse(localStorage.getItem("oukitel_activity")||"[]"), lastStored=0;
+const saveUi=()=>localStorage.setItem("oukitel_ui",JSON.stringify(settings));
+const setBanner=message=>{$("banner").textContent=message||"";$("banner").classList.toggle("hidden",!message)};
+const selected=()=>settings.device&&devices.find(d=>d.productKey===settings.device.productKey&&d.deviceKey===settings.device.deviceKey)||settings.device;
+const yesNo=value=>value?"Увімкнено":"Вимкнено";
+function api(path,options={}){return fetch(`/api${path}`,{credentials:"same-origin",...options,headers:{"content-type":"application/json",...(options.headers||{})}}).then(async r=>{const j=await r.json().catch(()=>({}));if(!r.ok)throw Error(j.error||`HTTP ${r.status}`);return j})}
+function tab(name){document.querySelectorAll(".screen").forEach(x=>x.classList.toggle("active",x.id===`${name}Screen`));document.querySelectorAll(".nav-item").forEach(x=>x.classList.toggle("active",x.dataset.tab===name));window.scrollTo({top:0,behavior:"smooth"})}
+function record(reason="Оновлено телеметрію"){
+  if(settings.mode!=="cloud")return; const now=Date.now(); if(now-lastStored<4*60e3)return; lastStored=now;
+  const point={at:now,soc:state.soc,input:state.input,output:state.output}; history=[...history.filter(x=>now-x.at<864e5),point]; localStorage.setItem("oukitel_history",JSON.stringify(history));
+  const previous=history.at(-2); if(previous&&(previous.ac!==state.ac||previous.usb!==state.usb||previous.dc!==state.dc)) activity.unshift({at:now,text:reason}); activity=activity.slice(0,10);localStorage.setItem("oukitel_activity",JSON.stringify(activity));
 }
-async function api(path, options = {}) {
-  const response = await fetch(`/api${path}`, {credentials: "same-origin", ...options, headers: {"content-type": "application/json", ...(options.headers || {})}});
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-  return body;
+function render(){
+  const live=settings.mode==="cloud"&&!!selected(), d=selected(), flow=flowSummary(state.input,state.output), reserve=Number(settings.reserve??8), planned=settings.loads.reduce((sum,x)=>sum+x.w,0);
+  $("soc").textContent=`${Math.round(state.soc||0)}%`;$("energy").textContent=`${(calcEnergy(state.soc)/1000).toFixed(2)} kWh`;$("batteryRing").style.background=`conic-gradient(var(--cyan) 0 ${Math.max(0,Math.min(100,state.soc||0))}%,#26314a ${Math.max(0,Math.min(100,state.soc||0))}% 100%)`;
+  $("statusText").textContent=live?"LIVE · Cloud":"Демо";$("statusDot").classList.toggle("live",live);$("powerHeadline").textContent=flow.title;$("powerSubline").textContent=live?flow.detail:"Підключіть Wonderfree, щоб побачити реальні дані.";$("remaining").textContent=fmtMin(state.remain);$("remainingDetail").textContent=state.remain!=null?"за оцінкою станції":"потрібні LIVE-дані";
+  $("inputW").textContent=`${Math.round(state.input||0)} W`;$("outputW").textContent=`${Math.round(state.output||0)} W`;$("inputDetail").textContent=`AC ${Math.round(state.acInput||0)} · Solar ${Math.round(state.dcInput||0)}`;$("outputDetail").textContent=state.output?"поточне навантаження":"немає навантаження";$("netLabel").textContent=flow.kind==="charging"?"Заряджається":flow.kind==="discharging"?"Живить навантаження":"Баланс";$("netPower").textContent=`${flow.net>0?"+":""}${flow.net} W`;$("netHint").textContent=flow.detail;$("flowArrow").textContent=flow.kind==="discharging"?"←":"→";
+  $("temperature").textContent=state.temp==null?"—":`${state.temp}°C`;$("chargeLimit").textContent=state.chargeLimit==null?"—":`${state.chargeLimit}%`;$("chargeEta").textContent=state.chargingRemain!=null?fmtMin(state.chargingRemain):state.input?fmtMin(((100-(state.soc||0))*2048/(state.input||1))*60):"—";$("chargeEtaHint").textContent=state.input?"за поточним входом":"потрібен вхід";
+  $("updatedShort").textContent=live?freshLabel(state.updated):"демо";$("freshness").textContent=live?"дані з хмари":"не LIVE";$("deviceModel").textContent=d?.productName||"OUKITEL P2001E PLUS";$("productKey").textContent=d?.productKey||"—";
+  for(const k of ["ac","usb","dc"]){$(k+"State").textContent=yesNo(state[k]);$(k+"State").parentElement.classList.toggle("on",!!state[k]);$(k+"ControlCopy").textContent=`${yesNo(state[k])} · cloud read-only`;document.querySelectorAll(`[data-control="${k}"] .switch`).forEach(x=>x.classList.toggle("on",!!state[k]))}
+  $("controlDataState").textContent=live?`Оновлено ${freshLabel(state.updated)}`:"Показано демо-стан";$("setupCard").classList.toggle("hidden",live);$("setupTitle").textContent=live?"Станцію підключено":"Підключіть свою станцію";$("setupText").textContent=live?"LIVE-дані оновлюються автоматично.":"Вхід через Wonderfree займає близько хвилини. Пароль не зберігається в браузері.";
+  $("reserveInput").value=reserve;$("reserveLabel").textContent=`${reserve}%`;$("usableEnergy").textContent=`${(calcEnergy(state.soc)*(1-reserve/100)*.88/1000).toFixed(2)} kWh`;$("reserveCopy").textContent=`SOC ${Math.round(state.soc||0)}% · резерв ${reserve}%`;$("plannedWatts").textContent=`${planned} W`;$("loadsCount").textContent=`${settings.loads.length} приладів`;$("budgetTime").textContent=planned?fmtMin(calcBudgetWithReserve(planned,state.soc,reserve)):"Додайте прилад";
+  renderLoads();renderInsights();
 }
-function populateDevices() {
-  const select = $("deviceSelect");
-  select.innerHTML = "";
-  if (!devices.length) { select.add(new Option("Немає прив’язаних станцій", "")); select.disabled = true; return; }
-  for (const device of devices) {
-    const option = new Option(`${device.deviceName || device.productName || device.deviceKey} — ${device.productName || device.productKey}`, `${device.productKey}|${device.deviceKey}`);
-    option.selected = settings.device?.productKey === device.productKey && settings.device?.deviceKey === device.deviceKey;
-    select.add(option);
-  }
-  select.disabled = false;
-}
-async function loadDevices() {
-  const result = await api("/devices"); devices = result.devices || []; populateDevices(); return devices;
-}
-async function refreshCloud() {
-  if (settings.mode !== "cloud" || !settings.device) return;
-  try {
-    const params = new URLSearchParams({pk: settings.device.productKey, dk: settings.device.deviceKey});
-    const payload = await api(`/state?${params}`);
-    state = {...mapAttrs(payload, state), updated: new Date()}; setBanner(""); render();
-  } catch (error) {
-    setBanner(`LIVE недоступний: ${error.message}. Показано останні дані.`);
-  }
-}
-async function login() {
-  const email = $("email").value.trim(), password = $("password").value;
-  $("loginStatus").className = "login-status"; $("loginStatus").textContent = "Вхід…";
-  try {
-    if (!email || !password) throw new Error("Введіть email і пароль Wonderfree.");
-    const result = await api("/login", {method: "POST", body: JSON.stringify({email, password})});
-    $("password").value = ""; devices = result.devices || []; populateDevices();
-    $("loginStatus").classList.add("good"); $("loginStatus").textContent = `Успішно. Знайдено станцій: ${devices.length}.`;
-  } catch (error) { $("loginStatus").classList.add("bad"); $("loginStatus").textContent = error.message; }
-}
-function saveSettings() {
-  const choice = $("deviceSelect").value.split("|");
-  settings.mode = $("modeSelect").value;
-  settings.device = choice.length === 2 ? devices.find(d => d.productKey === choice[0] && d.deviceKey === choice[1]) || null : null;
-  saveUi(); $("settingsDialog").close(); render(); refreshCloud();
-}
-async function logout() {
-  try { await api("/logout", {method:"POST", body:"{}"}); } catch (_) { /* local state must still be cleared */ }
-  devices = []; settings = {mode:"demo", device:null}; saveUi(); state = {...DEMO, updated:new Date()}; $("loginStatus").textContent = "Сесію стерто."; render();
-}
-$("settingsBtn").addEventListener("click", async () => {
-  $("modeSelect").value = settings.mode; $("password").value = ""; $("loginStatus").textContent = "";
-  try { await loadDevices(); } catch (_) { populateDevices(); }
-  $("settingsDialog").showModal();
-});
-$("loginBtn").addEventListener("click", login); $("saveBtn").addEventListener("click", saveSettings); $("logoutBtn").addEventListener("click", logout);
-$("refreshBtn").addEventListener("click", () => settings.mode === "cloud" ? refreshCloud() : (state.updated = new Date(), render()));
-$("budgetW").addEventListener("input", render);
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
-render(); if (settings.mode === "cloud") { loadDevices().then(refreshCloud).catch(() => setBanner("Сесію завершено. Увійдіть знову.")); }
-setInterval(refreshCloud, 30000);
-
+function renderLoads(){const list=$("loadsList");list.innerHTML=settings.loads.length?settings.loads.map((x,i)=>`<article class="load-row"><span class="load-symbol">${x.icon||"⚡"}</span><span><b>${escapeHtml(x.name)}</b><small>${x.w} W</small></span><button data-remove-load="${i}" aria-label="Видалити ${escapeHtml(x.name)}">×</button></article>`).join(""):`<div class="empty-state">Додайте прилади нижче — застосунок підкаже час автономності.</div>`;$("presetGrid").innerHTML=PRESETS.map(([n,w,i])=>`<button data-preset="${n}" data-w="${w}" data-icon="${i}"><span>${i}</span>${n}<small>${w} W</small></button>`).join("")}
+function renderInsights(){const s=historyStats(history);$("peakInput").textContent=history.length?`${Math.round(s.peakInput)} W`:"—";$("peakOutput").textContent=history.length?`${Math.round(s.peakOutput)} W`:"—";$("socChange").textContent=s.socChange==null?"—":`${s.socChange>0?"+":""}${Math.round(s.socChange)}%`;$("historyCount").textContent=history.length;$("historyLead").textContent=history.length?"Дані зберігаються тільки на цьому iPhone та автоматично видаляються через 24 години.":"Історія зберігається лише на цьому пристрої. Вона почне збиратися після LIVE-підключення.";drawChart();$("activityList").innerHTML=activity.length?activity.map(x=>`<div><span>●</span><p>${escapeHtml(x.text)}<small>${new Date(x.at).toLocaleString("uk-UA",{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"2-digit"})}</small></p></div>`).join(""):`<div class="empty-state">Щойно LIVE-дані почнуть оновлюватись, тут з’являться важливі зміни.</div>`}
+function drawChart(){const c=$("historyChart"),x=c.getContext("2d"),w=c.width,h=c.height;x.clearRect(0,0,w,h);x.fillStyle="#0b1324";x.fillRect(0,0,w,h);for(let i=1;i<4;i++){x.strokeStyle="rgba(255,255,255,.08)";x.beginPath();x.moveTo(0,h*i/4);x.lineTo(w,h*i/4);x.stroke()}if(history.length<2){x.fillStyle="#8491aa";x.font="16px system-ui";x.textAlign="center";x.fillText("Поки що немає достатньо LIVE-даних",w/2,h/2);return}const line=(key,max,color)=>{x.strokeStyle=color;x.lineWidth=4;x.lineJoin="round";x.beginPath();history.forEach((p,i)=>{const px=i*w/(history.length-1),py=h-16-(Math.max(0,p[key]||0)/max)*(h-32);i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke()};line("soc",100,"#20e8d0");const peak=Math.max(100,...history.map(x=>Math.max(x.input||0,x.output||0)));line("input",peak,"#6c9cff");line("output",peak,"#ffb36a")}
+function escapeHtml(v){return String(v).replace(/[&<>"']/g,x=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[x]))}
+async function loadDevices(){const j=await api("/devices");devices=j.devices||[];const select=$("deviceSelect");select.innerHTML="";if(!devices.length){select.add(new Option("Немає прив’язаних станцій",""));select.disabled=true;return}devices.forEach(d=>{const o=new Option(`${d.deviceName||d.productName} — ${d.productName||d.productKey}`,`${d.productKey}|${d.deviceKey}`);o.selected=settings.device?.deviceKey===d.deviceKey;select.add(o)});select.disabled=false}
+async function refresh(){if(settings.mode!=="cloud"||!settings.device)return;try{const q=new URLSearchParams({pk:settings.device.productKey,dk:settings.device.deviceKey}),p=await api(`/state?${q}`);state={...mapAttrs(p,state),updated:new Date()};record();setBanner("");render()}catch(e){setBanner(`LIVE недоступний: ${e.message}. Показано останні дані.`)}}
+async function login(){const email=$("email").value.trim(),password=$("password").value;$("loginStatus").textContent="Вхід…";try{if(!email||!password)throw Error("Введіть email і пароль Wonderfree.");const j=await api("/login",{method:"POST",body:JSON.stringify({email,password})});$("password").value="";devices=j.devices||[];$("loginStatus").className="login-status good";$("loginStatus").textContent=`Успішно. Знайдено станцій: ${devices.length}.`;await loadDevices()}catch(e){$("loginStatus").className="login-status bad";$("loginStatus").textContent=e.message}}
+function openSettings(){ $("modeSelect").value=settings.mode;$("loginStatus").textContent="";$("connectionTitle").textContent=settings.mode==="cloud"?"Cloud підключено":"Демо-режим";$("connectionCopy").textContent=settings.mode==="cloud"?"Токен і пароль не зберігаються у браузері.":"Підключіть Wonderfree для LIVE-даних.";loadDevices().catch(()=>{});$("settingsDialog").showModal() }
+function info(html){$("infoContent").innerHTML=html;$("infoDialog").showModal()}
+$("settingsBtn").onclick=openSettings;$("setupBtn").onclick=openSettings;$("loginBtn").onclick=login;$("saveBtn").onclick=()=>{const [pk,dk]=$("deviceSelect").value.split("|");settings.mode=$("modeSelect").value;settings.device=devices.find(x=>x.productKey===pk&&x.deviceKey===dk)||null;saveUi();$("settingsDialog").close();render();refresh()};$("logoutBtn").onclick=async()=>{try{await api("/logout",{method:"POST",body:"{}"})}catch{}devices=[];settings={mode:"demo",device:null,reserve:settings.reserve||8,loads:settings.loads||[]};saveUi();state={...DEMO,updated:new Date()};render();$("settingsDialog").close()};
+document.querySelectorAll("[data-tab]").forEach(x=>x.onclick=()=>tab(x.dataset.tab));document.querySelectorAll("[data-control]").forEach(x=>x.onclick=()=>info("<p class='eyebrow'>БЕЗПЕЧНЕ КЕРУВАННЯ</p><h2>Команди поки вимкнені</h2><p>Стан виходу показується в LIVE-даних, але застосунок не надсилає cloud-команду без перевіреного endpoint. Це навмисний захист від випадкового вимкнення AC, USB або DC.</p><p>Коли буде готовий локальний LAN bridge, тут з’явиться підтверджуване керування у вашій домашній Wi‑Fi мережі.</p>"));document.querySelector(".dialog-close").onclick=()=>$("infoDialog").close();document.querySelectorAll("[data-open]").forEach(x=>x.onclick=()=>info("<p class='eyebrow'>ЯК ЧИТАТИ ЕКРАН</p><h2>Потік енергії</h2><p><b>Вхід</b> — потужність від мережі або сонячних панелей. <b>Вихід</b> — те, що зараз споживають прилади. Різниця показує, заряджається чи розряджається батарея.</p><p>Час роботи й до 100% — оцінки самої станції або розрахунок за поточною потужністю; вони змінюються разом із навантаженням.</p>"));
+$("reserveInput").oninput=e=>{settings.reserve=+e.target.value;saveUi();render()};$("presetGrid").onclick=e=>{const b=e.target.closest("button[data-preset]");if(!b)return;settings.loads.push({name:b.dataset.preset,w:+b.dataset.w,icon:b.dataset.icon});saveUi();render()};$("addCustomLoad").onclick=()=>{const name=$("customLoadName").value.trim(),w=+$("customLoadW").value;if(!name||!w||w>2400)return;settings.loads.push({name,w,icon:"⚡"});$("customLoadName").value="";$("customLoadW").value="";saveUi();render()};$("loadsList").onclick=e=>{const b=e.target.closest("[data-remove-load]");if(!b)return;settings.loads.splice(+b.dataset.removeLoad,1);saveUi();render()};$("clearLoadsBtn").onclick=()=>{settings.loads=[];saveUi();render()};$("clearHistoryBtn").onclick=()=>{history=[];activity=[];localStorage.removeItem("oukitel_history");localStorage.removeItem("oukitel_activity");render()};
+if("serviceWorker"in navigator)navigator.serviceWorker.register("/sw.js").catch(()=>{});render();if(settings.mode==="cloud")loadDevices().then(refresh).catch(()=>setBanner("Сесію завершено. Увійдіть знову."));setInterval(refresh,30000);

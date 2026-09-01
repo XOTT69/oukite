@@ -12,6 +12,18 @@ export function fmtMin(value) {
 }
 export function calcEnergy(soc) { return CAPACITY_WH * Math.max(0, Math.min(100, Number(soc) || 0)) / 100; }
 export function calcBudget(watts, soc) { return (calcEnergy(soc) * (1 - RESERVE) * EFFICIENCY / Math.max(1, Number(watts) || 1)) * 60; }
+export function calcBudgetWithReserve(watts, soc, reservePercent = 8) { return (calcEnergy(soc) * (1 - Math.max(0, Math.min(30, reservePercent)) / 100) * EFFICIENCY / Math.max(1, Number(watts) || 1)) * 60; }
+export function flowSummary(input, output) {
+  const net = Math.round((Number(input) || 0) - (Number(output) || 0));
+  if (net > 10) return {kind:"charging", net, title:"Станція заряджається", detail:`+${net} W у батарею`};
+  if (net < -10) return {kind:"discharging", net, title:"Станція живить прилади", detail:`${Math.abs(net)} W з батареї`};
+  return {kind:"idle", net:0, title:"Станція готова", detail:"Баланс близький до нуля"};
+}
+export function freshLabel(updated, now = Date.now()) { const min = Math.max(0, Math.floor((now - new Date(updated).getTime()) / 60000)); return min < 1 ? "щойно" : min === 1 ? "1 хв тому" : `${min} хв тому`; }
+export function historyStats(entries) {
+  if (!entries.length) return {peakInput:0,peakOutput:0,socChange:null};
+  return {peakInput:Math.max(...entries.map(x=>x.input||0)), peakOutput:Math.max(...entries.map(x=>x.output||0)), socChange:(entries.at(-1).soc ?? 0) - (entries[0].soc ?? 0)};
+}
 export function mapAttrs(payload, previous) {
   const out = {...previous};
   const attrs = payload?.data?.customizeTslInfo || payload?.customizeTslInfo || [];
@@ -24,4 +36,3 @@ export function mapAttrs(payload, previous) {
   for (const [id, key] of Object.entries({43:"ac",44:"usb",46:"dc"})) if (byId[id] != null) out[key] = bool(id);
   return out;
 }
-
