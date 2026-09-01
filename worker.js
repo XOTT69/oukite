@@ -27,8 +27,7 @@ export default {
     if (!url.pathname.startsWith("/api/")) {
       if (!["GET", "HEAD"].includes(request.method))
         return json({ error: "Метод не підтримується." }, 405);
-      if (url.pathname === "/") url.pathname = "/index.html";
-      return secure(await env.ASSETS.fetch(new Request(url, request)));
+      return secure(await env.ASSETS.fetch(request));
     }
     if (request.method === "OPTIONS")
       return secure(
