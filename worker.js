@@ -10,7 +10,10 @@ const SESSION_TTL = 60 * 60 * 12;
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (!url.pathname.startsWith("/api/")) return env.ASSETS.fetch(request);
+    if (!url.pathname.startsWith("/api/")) {
+      if (url.pathname === "/") url.pathname = "/index.html";
+      return env.ASSETS.fetch(new Request(url, request));
+    }
     if (request.method === "OPTIONS") return new Response(null, {status: 204});
     try {
       if (url.pathname === "/api/health") return json({ok: true, mode: "cloud-read-only"});
