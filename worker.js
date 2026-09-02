@@ -40,18 +40,18 @@ export default {
       if (url.pathname === "/api/health" && request.method === "GET")
         return json({ ok: true, mode: "cloud-read-only" });
       if (url.pathname === "/api/login" && request.method === "POST")
-        return login(request, env);
+        return await login(request, env);
       if (url.pathname === "/api/logout" && request.method === "POST")
-        return logout(request, env);
+        return await logout(request, env);
       const session = await sessionFor(request, env);
       if (!session)
         return json({ error: "Сесія завершилась. Увійдіть знову." }, 401);
       if (url.pathname === "/api/devices" && request.method === "GET")
         return json({ devices: await accountDevices(session.token) });
       if (url.pathname === "/api/state" && request.method === "GET")
-        return state(url, session.token);
+        return await state(url, session.token);
       if (url.pathname === "/api/tsl" && request.method === "GET")
-        return tsl(url, session.token);
+        return await tsl(url, session.token);
       return json({ error: "Не знайдено." }, 404);
     } catch (error) {
       console.error("OUKITEL Worker error", error);

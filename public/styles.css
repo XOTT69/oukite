@@ -12,6 +12,22 @@
   --red: #ff9ca8;
   --shadow: 0 20px 60px rgba(0, 0, 0, 0.28);
 }
+.svg-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+.icon {
+  width: 1em;
+  height: 1em;
+  display: inline-block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 * {
   box-sizing: border-box;
   -webkit-tap-highlight-color: transparent;
@@ -245,8 +261,7 @@ p {
   border-radius: 50%;
   background: #223958;
   color: var(--cyan);
-  font-size: 27px;
-  line-height: 20px;
+  font-size: 18px;
 }
 .power-card,
 .outputs-card,
@@ -288,7 +303,7 @@ p {
   border-radius: 17px;
   background: #0a172a;
 }
-.flow-node > span {
+.flow-node > .icon {
   font-size: 18px;
 }
 .flow-node small,
@@ -301,10 +316,10 @@ p {
   font-size: 22px;
   letter-spacing: -0.04em;
 }
-.flow-node.input > span {
+.flow-node.input > .icon {
   color: var(--blue);
 }
-.flow-node.output > span {
+.flow-node.output > .icon {
   color: var(--orange);
 }
 .flow-arrow {
@@ -387,7 +402,7 @@ p {
   background: #0a172a;
   color: var(--muted);
 }
-.output-state > span {
+.output-state > .icon {
   font-size: 18px;
 }
 .output-state small {
@@ -677,7 +692,7 @@ select {
   padding: 14px 0;
   border-bottom: 1px solid var(--line);
 }
-.control-row > span {
+.control-row > .icon {
   color: var(--cyan);
   font-size: 22px;
 }
@@ -749,7 +764,7 @@ select {
   padding: 5px;
   font-size: 10px;
 }
-.nav-item span {
+.nav-item .icon {
   font-size: 20px;
 }
 .nav-item.active {
