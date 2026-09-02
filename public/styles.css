@@ -266,6 +266,7 @@ p {
 .power-card,
 .outputs-card,
 .planner-summary,
+.adaptive-card,
 .reserve-card,
 .add-load,
 .chart-card,
@@ -469,6 +470,57 @@ p {
   color: var(--cyan);
   font-size: 28px;
 }
+.planner-summary .accent small {
+  line-height: 1.4;
+}
+.adaptive-card > p {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.confidence-badge {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 100px;
+  padding: 6px 9px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+.confidence-badge.good {
+  border-color: rgba(103, 230, 165, 0.5);
+  color: var(--green);
+}
+.confidence-badge.medium {
+  border-color: rgba(255, 179, 106, 0.5);
+  color: var(--orange);
+}
+.calibration-box {
+  margin-top: 14px;
+}
+.calibration-box > div {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: #0a172a;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.calibration-box button,
+.load-calibrate {
+  border: 0;
+  background: transparent;
+  color: var(--cyan);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+}
 .reserve-card input,
 .notification-box + label input {
   width: 100%;
@@ -515,6 +567,9 @@ p {
 .load-row small {
   color: var(--muted);
   font-size: 11px;
+}
+.load-calibrate {
+  white-space: nowrap;
 }
 .load-row button {
   border: 0;
@@ -612,7 +667,7 @@ select {
 }
 .segmented {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--line);

@@ -35,3 +35,10 @@ test("PWA shell exposes the four primary screens and accessible navigation", () 
   assert.match(html, /<nav class="bottom-nav" aria-label="Навігація">/);
   assert.match(html, /aria-label="Налаштування"/);
 });
+
+test("PWA exposes adaptive planning and an explicit background-monitor opt-in", () => {
+  assert.match(html, /id="adaptiveTitle"/);
+  assert.match(html, /id="calibrationBox"/);
+  assert.match(html, /id="monitorEnabled"/);
+  assert.match(html, /data-range="168"/);
+});

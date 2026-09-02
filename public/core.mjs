@@ -31,6 +31,79 @@ export function calcBudgetWithReserve(watts, soc, reservePercent = 8) {
     60
   );
 }
+
+// Integrates the output curve instead of assuming that a device draws its
+// nameplate power constantly. Gaps above the sampling window are deliberately
+// ignored: inventing consumption during a cloud outage would distort a forecast.
+export function energyFromSamples(entries, maxGapMs = 12 * 60 * 1000) {
+  const samples = [...(Array.isArray(entries) ? entries : [])]
+    .filter(
+      (entry) =>
+        Number.isFinite(Number(entry?.at)) &&
+        Number.isFinite(Number(entry?.output)) &&
+        Number(entry.output) >= 0,
+    )
+    .sort((a, b) => Number(a.at) - Number(b.at));
+  let wh = 0,
+    coveredMs = 0;
+  for (let index = 1; index < samples.length; index++) {
+    const previous = samples[index - 1],
+      current = samples[index],
+      gap = Number(current.at) - Number(previous.at);
+    if (gap <= 0 || gap > maxGapMs) continue;
+    wh += ((Number(previous.output) + Number(current.output)) / 2) * (gap / 36e5);
+    coveredMs += gap;
+  }
+  return { wh, coveredMs, samples };
+}
+
+export function adaptiveForecast(
+  entries,
+  soc,
+  reservePercent = 8,
+  fallbackWatts = 0,
+  now = Date.now(),
+) {
+  const { wh, coveredMs, samples } = energyFromSamples(entries);
+  const measuredWatts = coveredMs ? wh / (coveredMs / 36e5) : 0;
+  const outputs = samples.map((entry) => Number(entry.output));
+  const quantile = (ratio) => {
+    if (!outputs.length) return 0;
+    const sorted = [...outputs].sort((a, b) => a - b),
+      position = (sorted.length - 1) * ratio,
+      lower = Math.floor(position),
+      upper = Math.ceil(position);
+    return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
+  };
+  const recentAt = samples.at(-1)?.at || 0,
+    fresh = now - Number(recentAt) <= 12 * 60 * 1000,
+    enough = samples.length >= 12 && coveredMs >= 55 * 60 * 1000 && fresh,
+    watts = enough && measuredWatts >= 1 ? measuredWatts : Number(fallbackWatts) || 0,
+    lowWatts = Math.max(1, enough ? Math.min(measuredWatts, quantile(0.25)) : watts),
+    highWatts = Math.max(1, enough ? Math.max(measuredWatts, quantile(0.9)) : watts),
+    confidence = !enough
+      ? "low"
+      : coveredMs >= 18 * 36e5 && samples.length >= 180
+        ? "high"
+        : "medium";
+  return {
+    watts,
+    measuredWatts,
+    energyWh: wh,
+    coveredMs,
+    samples: samples.length,
+    fresh,
+    confidence,
+    source: enough ? "measured" : "plan",
+    minutes: watts ? calcBudgetWithReserve(watts, soc, reservePercent) : null,
+    conservativeMinutes: watts
+      ? calcBudgetWithReserve(highWatts, soc, reservePercent)
+      : null,
+    optimisticMinutes: watts
+      ? calcBudgetWithReserve(lowWatts, soc, reservePercent)
+      : null,
+  };
+}
 export function flowSummary(input, output) {
   const net = Math.round((Number(input) || 0) - (Number(output) || 0));
   if (net > 10)

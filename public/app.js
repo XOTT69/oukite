@@ -1,5 +1,6 @@
 import {
   CAPACITY_WH,
+  adaptiveForecast,
   calcBudgetWithReserve,
   calcEnergy,
   flowSummary,
@@ -40,6 +41,7 @@ const DEFAULT = {
   historyRange: 24,
   textSize: "normal",
   alerts: { enabled: false, threshold: 20, lastAlertAt: 0 },
+  calibration: null,
 };
 const PRESETS = [
   ["Wi‑Fi роутер", 15, "⌁"],
@@ -104,6 +106,8 @@ function normalizeLoads(value) {
         .trim()
         .slice(0, 30),
       w: inRange(load.w, 1, 2400, 0),
+      averageW: inRange(load.averageW, 1, 2400, 0) || null,
+      calibratedAt: inRange(load.calibratedAt, 0, Date.now(), 0) || null,
       icon: String(load.icon || "⚡").slice(0, 4),
     }))
     .filter((load) => load.name && load.w)
@@ -128,7 +132,7 @@ function normalizeSettings(value) {
     device,
     reserve: inRange(raw.reserve, 0, 30, DEFAULT.reserve),
     loads: normalizeLoads(raw.loads),
-    historyRange: [1, 6, 24].includes(Number(raw.historyRange))
+    historyRange: [1, 6, 24, 168].includes(Number(raw.historyRange))
       ? Number(raw.historyRange)
       : DEFAULT.historyRange,
     textSize: raw.textSize === "large" ? "large" : "normal",
@@ -137,11 +141,23 @@ function normalizeSettings(value) {
       threshold: inRange(raw.alerts?.threshold, 5, 50, 20),
       lastAlertAt: inRange(raw.alerts?.lastAlertAt, 0, Date.now(), 0),
     },
+    calibration:
+      raw.calibration &&
+      typeof raw.calibration === "object" &&
+      Number.isInteger(raw.calibration.index) &&
+      raw.calibration.index >= 0 &&
+      raw.calibration.index < normalizeLoads(raw.loads).length &&
+      inRange(raw.calibration.startedAt, Date.now() - 7 * 864e5, Date.now(), 0)
+        ? {
+            index: raw.calibration.index,
+            startedAt: Number(raw.calibration.startedAt),
+          }
+        : null,
   };
 }
 function normalizeHistory(value) {
   if (!Array.isArray(value)) return [];
-  const earliest = Date.now() - 86400000;
+  const earliest = Date.now() - 8 * 86400000;
   return value
     .filter((entry) => entry && typeof entry === "object")
     .map((entry) => ({
@@ -155,7 +171,7 @@ function normalizeHistory(value) {
     }))
     .filter((entry) => entry.at)
     .sort((a, b) => a.at - b.at)
-    .slice(-360);
+    .slice(-2400);
 }
 function normalizeActivity(value) {
   if (!Array.isArray(value)) return [];
@@ -178,7 +194,9 @@ let state = { ...DEMO },
   lastStored = 0,
   lastDeviceCheck = 0,
   lastOnline = null,
-  timer = 0;
+  timer = 0,
+  monitor = { enabled: false, state: "disabled" },
+  lastMonitorLoad = 0;
 const cloud = () => settings.mode === "cloud" && !!chosen(),
   chosen = () =>
     (settings.device &&
@@ -322,14 +340,17 @@ function conn() {
     ? "Станція підключена й онлайн"
     : "Cloud підключено, станція офлайн";
   $("connectionCopy").textContent = on
-    ? "Дані синхронізуються кожні 30 секунд."
+    ? monitor.enabled
+      ? "LIVE — кожні 30 секунд; фоновий збір — кожні 5 хвилин."
+      : "Дані синхронізуються кожні 30 секунд."
     : "Перевірте живлення, Wi‑Fi та інтернет станції.";
 }
 function render() {
   const d = chosen(),
     f = flowSummary(state.input, state.output),
     r = Math.max(0, Math.min(30, +settings.reserve || 8)),
-    planned = settings.loads.reduce((s, x) => s + (+x.w || 0), 0),
+    planned = settings.loads.reduce((s, x) => s + (+x.averageW || +x.w || 0), 0),
+    forecast = adaptiveForecast(history, state.soc, r, planned),
     usable = calcEnergy(state.soc) * (1 - r / 100) * 0.88;
   $("soc").textContent = Math.round(state.soc || 0) + "%";
   $("energy").textContent = (calcEnergy(state.soc) / 1000).toFixed(2) + " kWh";
@@ -405,18 +426,32 @@ function render() {
   $("usableEnergy").textContent = (usable / 1000).toFixed(2) + " kWh";
   $("reserveCopy").textContent =
     "SOC " + Math.round(state.soc || 0) + "% · резерв " + r + "%";
-  $("plannedWatts").textContent = w(planned);
+  $("plannedWatts").textContent = w(forecast.watts || planned);
   $("plannedWattsHome").textContent = planned
     ? "План: " + w(planned)
     : "Навантаження не задано";
   $("loadsCount").textContent = settings.loads.length + " приладів";
-  const budget = planned
-    ? fmtMin(calcBudgetWithReserve(planned, state.soc, r))
+  const budget = forecast.watts
+    ? fmtMin(forecast.minutes)
     : "Додайте прилад";
   $("budgetTime").textContent = budget;
   $("readyHours").textContent = budget;
-  $("readyCopy").textContent = planned
-    ? "Зараз у плані " + w(planned) + " з резервом " + r + "%."
+  $("forecastLabel").textContent =
+    forecast.source === "measured" ? "За фактичним середнім" : "За планом";
+  $("forecastRange").textContent =
+    forecast.source === "measured"
+      ? "Звично: " +
+        fmtMin(forecast.conservativeMinutes) +
+        " — " +
+        fmtMin(forecast.optimisticMinutes)
+      : "Потрібні реальні вимірювання для адаптивного прогнозу.";
+  $("readyCopy").textContent = forecast.watts
+    ? (forecast.source === "measured"
+        ? "Фактичне середнє " + w(forecast.watts) + ". "
+        : "Зараз у плані " + w(planned) + ". ") +
+      "Резерв " +
+      r +
+      "%."
     : "Додайте прилади, щоб оцінити ваш резерв.";
   $("planCompare").textContent = !planned
     ? "Додайте прилади, щоб порівнювати план із фактичним виходом."
@@ -429,6 +464,7 @@ function render() {
         " · різниця " +
         w(Math.abs(planned - state.output)) +
         ".";
+  renderAdaptive(forecast);
   renderLoads();
   renderHistory();
   conn();
@@ -452,8 +488,12 @@ function renderLoads() {
             "</span><div><b>" +
             safe(x.name) +
             "</b><small>" +
-            w(x.w) +
-            '</small></div><button data-remove-load="' +
+            (x.averageW
+              ? "виміряно " + w(x.averageW) + " · паспорт " + w(x.w)
+              : "паспорт " + w(x.w)) +
+            '</small></div><button class="load-calibrate" data-calibrate-load="' +
+            i +
+            '">Виміряти</button><button data-remove-load="' +
             i +
             '" aria-label="Видалити">×</button></article>',
         )
@@ -476,6 +516,54 @@ function renderLoads() {
       " W</small></button>",
   ).join("");
 }
+function renderAdaptive(forecast) {
+  const labels = { low: "Мало даних", medium: "Середня точність", high: "Висока точність" };
+  $("confidenceBadge").textContent = labels[forecast.confidence] || "—";
+  $("confidenceBadge").className =
+    "confidence-badge " + (forecast.confidence === "high" ? "good" : forecast.confidence === "medium" ? "medium" : "");
+  if (forecast.source === "measured") {
+    $("adaptiveTitle").textContent = "Фактичне середнє: " + w(forecast.watts);
+    $("adaptiveCopy").textContent =
+      "За " +
+      Math.round(forecast.coveredMs / 36e5) +
+      " год даних витрачено " +
+      Math.round(forecast.energyWh) +
+      " Wh. Нульові проміжки теж враховані — так холодильник не рахується як постійні 100 W.";
+  } else if (monitor.enabled && monitor.lastError) {
+    $("adaptiveTitle").textContent = "Нові вимірювання призупинено";
+    $("adaptiveCopy").textContent =
+      monitor.lastError +
+      " Прогноз повернеться до фактичних даних, щойно станція знову буде онлайн.";
+  } else if (monitor.enabled) {
+    $("adaptiveTitle").textContent = "Збираємо достатньо даних";
+    $("adaptiveCopy").textContent =
+      "Фоновий моніторинг активний. Перший надійний прогноз з’явиться приблизно через годину; точність зростає протягом доби.";
+  } else {
+    $("adaptiveTitle").textContent = "Потрібні вимірювання";
+    $("adaptiveCopy").textContent =
+      "Увімкніть фоновий моніторинг у налаштуваннях: сервер збиратиме фактичне навантаження кожні 5 хвилин, навіть коли PWA закритий.";
+  }
+  const calibration = settings.calibration,
+    target = calibration && settings.loads[calibration.index],
+    elapsed = calibration ? Date.now() - calibration.startedAt : 0;
+  if (!target) {
+    $("calibrationBox").innerHTML =
+      '<div>Для точного профілю холодильника натисніть «Виміряти» біля нього та залиште активним лише цей прилад щонайменше на 6 годин.</div>';
+    return;
+  }
+  const enough = elapsed >= 6 * 36e5 && forecast.samples >= 12;
+  $("calibrationBox").innerHTML = enough
+    ? '<div><span>Калібрування «' +
+      safe(target.name) +
+      '» готове: середнє ' +
+      w(forecast.measuredWatts) +
+      '.</span><button id="applyCalibrationBtn">Застосувати</button></div>'
+    : '<div><span>Калібруємо «' +
+      safe(target.name) +
+      "». Залиште на станції лише цей прилад. Результат буде через " +
+      fmtMin(Math.max(0, 360 - Math.round(elapsed / 60000))) +
+      '.</span><button id="cancelCalibrationBtn">Скасувати</button></div>';
+}
 function renderHistory() {
   const entries = history.filter(
       (x) => x.at >= Date.now() - (+settings.historyRange || 24) * 3600000,
@@ -489,8 +577,12 @@ function renderHistory() {
       : (s.socChange > 0 ? "+" : "") + Math.round(s.socChange) + "%";
   $("historyCount").textContent = entries.length;
   $("historyLead").textContent = entries.length
-    ? "Дані зберігаються лише на цьому iPhone та автоматично видаляються через 24 години."
-    : "Історія почне збиратися після LIVE-підключення.";
+    ? monitor.enabled
+      ? "Фонові дані зберігаються захищено 14 днів; застосунок показує останній обраний період."
+      : "Дані зберігаються лише на цьому iPhone."
+    : monitor.enabled
+      ? "Фоновий збір увімкнено. Перші точки з’являться після наступного циклу."
+      : "Історія почне збиратися після LIVE-підключення.";
   document
     .querySelectorAll("[data-range]")
     .forEach((x) =>
@@ -596,6 +688,44 @@ async function lowAlert() {
   if ("Notification" in window && Notification.permission === "granted")
     new Notification("OUKITEL Home", { body: msg, icon: "/icon-192.png" });
 }
+async function loadMonitor({ history: shouldLoadHistory = false, force = false } = {}) {
+  if (!cloud()) {
+    monitor = { enabled: false, state: "disabled" };
+    return;
+  }
+  const j = await api("/monitor");
+  monitor = j.monitor || { enabled: false, state: "disabled" };
+  if (
+    monitor.enabled &&
+    (shouldLoadHistory || force || Date.now() - lastMonitorLoad > 120000)
+  ) {
+    const samples = await api(
+      "/monitor/history?hours=" + Math.max(24, settings.historyRange || 24),
+    );
+    if (Array.isArray(samples.samples)) {
+      history = normalizeHistory(samples.samples);
+      lastMonitorLoad = Date.now();
+      save();
+    }
+    monitor = samples.monitor || monitor;
+  }
+}
+async function saveMonitor(enabled) {
+  if (!cloud() || !chosen()) {
+    monitor = { enabled: false, state: "disabled" };
+    return;
+  }
+  const j = await api("/monitor", {
+    method: "POST",
+    body: JSON.stringify({
+      enabled,
+      productKey: chosen().productKey,
+      deviceKey: chosen().deviceKey,
+    }),
+  });
+  monitor = j.monitor || { enabled: false, state: "disabled" };
+  lastMonitorLoad = 0;
+}
 async function refresh({ forceDevices = false } = {}) {
   if (!cloud()) return;
   if (refreshing) return refreshing;
@@ -604,6 +734,7 @@ async function refresh({ forceDevices = false } = {}) {
     try {
       await devicesLoad({ force: forceDevices });
       if (!online()) {
+        await loadMonitor({ force: forceDevices });
         banner("Cloud підключено, але станція офлайн. Показано останні дані.");
         render();
         return;
@@ -615,6 +746,7 @@ async function refresh({ forceDevices = false } = {}) {
         );
       state = { ...mapAttrs(j, state), updated: new Date() };
       record();
+      await loadMonitor({ force: forceDevices });
       await lowAlert();
       banner("");
       render();
@@ -655,11 +787,24 @@ function settingsOpen() {
   $("alertEnabled").checked = !!settings.alerts?.enabled;
   $("alertThreshold").value = settings.alerts?.threshold || 20;
   $("alertThresholdValue").textContent = $("alertThreshold").value + "%";
+  $("monitorEnabled").checked = monitor.enabled === true;
+  $("monitorSettingsCopy").textContent = monitor.enabled
+    ? monitor.state === "auth-required"
+      ? "Потрібен повторний вхід Wonderfree, щоб відновити фоновий збір."
+      : "Фоновий збір активний: лише читання телеметрії кожні 5 хвилин."
+    : "Сервер зчитує лише телеметрію кожні 5 хвилин, навіть коли застосунок закритий. Команди на станцію не надсилаються.";
   $("loginStatus").textContent = "";
   conn();
   if (settings.mode === "cloud")
     devicesLoad()
-      .then(conn)
+      .then(() => loadMonitor({ force: true }))
+      .then(() => {
+        $("monitorEnabled").checked = monitor.enabled === true;
+        $("monitorSettingsCopy").textContent = monitor.enabled
+          ? "Фоновий збір активний: лише читання телеметрії кожні 5 хвилин."
+          : "Сервер зчитує лише телеметрію кожні 5 хвилин, навіть коли застосунок закритий. Команди на станцію не надсилаються.";
+        conn();
+      })
       .catch(() => {});
   $("settingsDialog").showModal();
 }
@@ -725,7 +870,7 @@ function bind() {
     .querySelectorAll("[data-info]")
     .forEach((x) => (x.onclick = () => info(x.dataset.info)));
   $("loginBtn").onclick = login;
-  $("saveBtn").onclick = () => {
+  $("saveBtn").onclick = async () => {
     const [pk, dk] = $("deviceSelect").value.split("|");
     settings.mode = $("modeSelect").value;
     settings.device =
@@ -738,6 +883,14 @@ function bind() {
     };
     settings = normalizeSettings(settings);
     save();
+    try {
+      await saveMonitor($("monitorEnabled").checked);
+    } catch (e) {
+      $("loginStatus").className = "login-status bad";
+      $("loginStatus").textContent =
+        "Налаштування збережено, але фоновий моніторинг не увімкнувся: " + e.message;
+      return;
+    }
     $("settingsDialog").close();
     render();
     refresh();
@@ -817,15 +970,38 @@ function bind() {
     render();
   };
   $("loadsList").onclick = (e) => {
+    const calibrate = e.target.closest("[data-calibrate-load]");
+    if (calibrate) {
+      const index = +calibrate.dataset.calibrateLoad,
+        load = settings.loads[index];
+      if (!load) return;
+      if (
+        !confirmAction(
+          "Почати калібрування «" +
+            load.name +
+            "»? На 6 годин залиште увімкненим лише цей прилад на станції. Інші споживачі зроблять результат неточним.",
+        )
+      )
+        return;
+      settings.calibration = { index, startedAt: Date.now() };
+      save();
+      render();
+      toast("Калібрування почалося. Дані збираються у фоні.");
+      return;
+    }
     const b = e.target.closest("[data-remove-load]");
     if (!b) return;
-    settings.loads.splice(+b.dataset.removeLoad, 1);
+    const index = +b.dataset.removeLoad;
+    settings.loads.splice(index, 1);
+    if (settings.calibration?.index === index) settings.calibration = null;
+    else if (settings.calibration?.index > index) settings.calibration.index--;
     save();
     render();
   };
   $("clearLoadsBtn").onclick = () => {
     if (!confirmAction("Стерти всі прилади з плану?")) return;
     settings.loads = [];
+    settings.calibration = null;
     save();
     render();
   };
@@ -834,7 +1010,9 @@ function bind() {
     if (!b) return;
     settings.historyRange = +b.dataset.range;
     save();
-    renderHistory();
+    loadMonitor({ history: true })
+      .catch(() => {})
+      .finally(renderHistory);
   };
   $("clearHistoryBtn").onclick = () => {
     if (!confirmAction("Стерти всю локальну історію та журнал подій?")) return;
@@ -859,12 +1037,33 @@ function bind() {
     history = [];
     activity = [];
     settings.loads = [];
+    settings.calibration = null;
     save();
     render();
     toast("Локальні плани й історію стерто.");
   };
   document.querySelector(".dialog-close").onclick = () =>
     $("infoDialog").close();
+  $("calibrationBox").onclick = (e) => {
+    if (e.target.id === "cancelCalibrationBtn") {
+      settings.calibration = null;
+      save();
+      render();
+      return;
+    }
+    if (e.target.id === "applyCalibrationBtn") {
+      const calibration = settings.calibration,
+        load = calibration && settings.loads[calibration.index],
+        forecast = adaptiveForecast(history, state.soc, settings.reserve, 0);
+      if (!load || forecast.source !== "measured") return;
+      load.averageW = Math.max(1, Math.round(forecast.measuredWatts));
+      load.calibratedAt = Date.now();
+      settings.calibration = null;
+      save();
+      render();
+      toast("Виміряне середнє для «" + load.name + "» збережено.");
+    }
+  };
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) refresh();
   });

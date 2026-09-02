@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  adaptiveForecast,
   calcBudget,
   calcBudgetWithReserve,
   calcEnergy,
@@ -82,6 +83,21 @@ test("telemetry preserves false output states and chart statistics handle empty 
     peakOutput: 0,
     socChange: null,
   });
+});
+
+test("adaptive forecast learns refrigerator duty cycles instead of nameplate watts", () => {
+  const start = 1_700_000_000_000;
+  const samples = Array.from({ length: 25 }, (_, index) => ({
+    at: start + index * 5 * 60 * 1000,
+    input: 0,
+    output: index % 2 ? 100 : 0,
+    soc: 80,
+  }));
+  const forecast = adaptiveForecast(samples, 80, 8, 100, samples.at(-1).at);
+  assert.equal(forecast.source, "measured");
+  assert.equal(Math.round(forecast.measuredWatts), 50);
+  assert.ok(forecast.minutes > calcBudgetWithReserve(100, 80, 8) * 1.9);
+  assert.equal(forecast.confidence, "medium");
 });
 
 test("worker health response has strict browser security headers", async () => {

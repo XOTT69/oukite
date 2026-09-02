@@ -1,4 +1,4 @@
-const CACHE = "oukitel-home-static-v3";
+const CACHE = "oukitel-home-static-v4";
 const ASSETS = [
   "/",
   "/index.html",

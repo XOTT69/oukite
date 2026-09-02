@@ -8,6 +8,11 @@ const EU = {
 const SESSION_TTL = 60 * 60 * 12;
 const LOGIN_WINDOW_SECONDS = 15 * 60;
 const LOGIN_MAX_ATTEMPTS = 5;
+const MONITOR_TTL = 60 * 60 * 24 * 31;
+const SAMPLE_TTL = 60 * 60 * 24 * 14;
+const SAMPLE_INTERVAL_MS = 5 * 60 * 1000;
+const SAMPLE_MAX_GAP_MS = 12 * 60 * 1000;
+const MONITOR_BATCH_SIZE = 25;
 const SECURITY_HEADERS = {
   "Content-Security-Policy":
     "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests",
@@ -48,6 +53,12 @@ export default {
         return json({ error: "Сесія завершилась. Увійдіть знову." }, 401);
       if (url.pathname === "/api/devices" && request.method === "GET")
         return json({ devices: await accountDevices(session.token) });
+      if (url.pathname === "/api/monitor" && request.method === "GET")
+        return await monitorStatus(request, env);
+      if (url.pathname === "/api/monitor" && request.method === "POST")
+        return await configureMonitor(request, env, session);
+      if (url.pathname === "/api/monitor/history" && request.method === "GET")
+        return await monitorHistory(request, env, url);
       if (url.pathname === "/api/state" && request.method === "GET")
         return await state(url, session.token);
       if (url.pathname === "/api/tsl" && request.method === "GET")
@@ -65,6 +76,9 @@ export default {
         error instanceof CloudError ? error.status : 502,
       );
     }
+  },
+  async scheduled(_event, env, ctx) {
+    ctx.waitUntil(sampleAllMonitors(env));
   },
 };
 
@@ -85,6 +99,7 @@ async function login(request, env) {
   await env.SESSIONS.put(`session:${sessionId}`, JSON.stringify({ token }), {
     expirationTtl: SESSION_TTL,
   });
+  await refreshMonitorToken(request, env, token);
   const response = json({ devices: await accountDevices(token) });
   response.headers.set(
     "Set-Cookie",
@@ -96,11 +111,13 @@ async function login(request, env) {
 async function logout(request, env) {
   const sessionId = cookie(request, "oukitel_session");
   if (sessionId) await env.SESSIONS.delete(`session:${sessionId}`);
+  await deleteMonitor(request, env);
   const response = json({ ok: true });
   response.headers.set(
     "Set-Cookie",
     "oukitel_session=; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=0",
   );
+  response.headers.append("Set-Cookie", monitorCookieHeader("", 0));
   response.headers.set("Cache-Control", "no-store");
   return response;
 }
@@ -109,6 +126,242 @@ async function sessionFor(request, env) {
   if (!id || !/^[A-Za-z0-9_-]{40,}$/.test(id)) return null;
   const data = await env.SESSIONS.get(`session:${id}`, "json");
   return data?.token ? data : null;
+}
+
+function monitorCookie(request) {
+  const id = cookie(request, "oukitel_monitor");
+  return /^[A-Za-z0-9_-]{40,}$/.test(id) ? id : "";
+}
+function monitorCookieHeader(id, maxAge = MONITOR_TTL) {
+  return `oukitel_monitor=${id || ""}; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=${maxAge}`;
+}
+function publicMonitor(record) {
+  if (!record)
+    return {
+      enabled: false,
+      intervalMinutes: 5,
+      retentionDays: 14,
+      state: "disabled",
+    };
+  return {
+    enabled: record.enabled === true,
+    intervalMinutes: 5,
+    retentionDays: 14,
+    state: record.authRequired
+      ? "auth-required"
+      : record.lastError
+        ? "waiting"
+        : record.lastSampleAt
+          ? "collecting"
+          : "starting",
+    lastSampleAt: record.lastSampleAt || null,
+    lastError: record.lastError || null,
+    device: record.device
+      ? { productKey: record.device.productKey, deviceKey: record.device.deviceKey }
+      : null,
+  };
+}
+async function monitorFor(request, env) {
+  const id = monitorCookie(request);
+  if (!id) return { id: "", record: null };
+  return { id, record: await env.SESSIONS.get(`monitor:${id}`, "json") };
+}
+async function monitorStatus(request, env) {
+  const { record } = await monitorFor(request, env);
+  return json({ monitor: publicMonitor(record) });
+}
+async function configureMonitor(request, env, session) {
+  const input = await readJson(request);
+  if (input.enabled !== true && input.enabled !== false)
+    throw new CloudError("Вкажіть, чи має працювати фоновий моніторинг.", 400);
+  const existing = await monitorFor(request, env);
+  if (!input.enabled) {
+    await deleteMonitor(request, env);
+    const response = json({ monitor: publicMonitor(null) });
+    response.headers.set("Set-Cookie", monitorCookieHeader("", 0));
+    return response;
+  }
+  const productKey = String(input.productKey || ""),
+    deviceKey = String(input.deviceKey || "");
+  if (!validDeviceId(productKey) || !validDeviceId(deviceKey))
+    throw new CloudError("Оберіть коректну станцію для моніторингу.", 400);
+  const device = (await accountDevices(session.token)).find(
+    (item) => item.productKey === productKey && item.deviceKey === deviceKey,
+  );
+  if (!device) throw new CloudError("Станція не знайдена у вашому акаунті.", 403);
+  const id = existing.id || randomId();
+  const record = {
+    enabled: true,
+    device: { productKey: device.productKey, deviceKey: device.deviceKey },
+    token: await encryptMonitorToken(session.token, env),
+    createdAt: existing.record?.createdAt || Date.now(),
+    lastSampleAt: existing.record?.lastSampleAt || null,
+    lastError: null,
+    authRequired: false,
+  };
+  await putMonitor(env, id, record);
+  const response = json({ monitor: publicMonitor(record) });
+  response.headers.set("Set-Cookie", monitorCookieHeader(id));
+  return response;
+}
+async function refreshMonitorToken(request, env, token) {
+  const { id, record } = await monitorFor(request, env);
+  if (!id || !record?.enabled) return;
+  record.token = await encryptMonitorToken(token, env);
+  record.authRequired = false;
+  record.lastError = null;
+  await putMonitor(env, id, record);
+}
+async function putMonitor(env, id, record) {
+  await env.SESSIONS.put(`monitor:${id}`, JSON.stringify(record), {
+    expirationTtl: MONITOR_TTL,
+  });
+}
+async function deleteMonitor(request, env) {
+  const id = monitorCookie(request);
+  if (!id) return;
+  await env.SESSIONS.delete(`monitor:${id}`);
+  await deletePrefix(env, `sample:${id}:`);
+}
+async function deletePrefix(env, prefix) {
+  if (typeof env.SESSIONS.list !== "function") return;
+  let cursor = undefined;
+  do {
+    const page = await env.SESSIONS.list({ prefix, cursor });
+    await Promise.all((page.keys || []).map((key) => env.SESSIONS.delete(key.name)));
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+}
+async function monitorHistory(request, env, url) {
+  const { id, record } = await monitorFor(request, env);
+  if (!id || !record?.enabled) return json({ samples: [], monitor: publicMonitor(record) });
+  const hours = Math.min(168, Math.max(1, Number(url.searchParams.get("hours")) || 24));
+  const samples = await samplesForRange(env, id, hours);
+  return json({ samples, monitor: publicMonitor(record) });
+}
+function sampleKey(id, at) {
+  return `sample:${id}:${new Date(at).toISOString().slice(0, 10)}:${String(at).padStart(13, "0")}`;
+}
+async function samplesForRange(env, id, hours, now = Date.now()) {
+  if (typeof env.SESSIONS.list !== "function") return [];
+  const after = now - hours * 36e5,
+    dates = new Set();
+  for (let t = after; t <= now; t += 864e5)
+    dates.add(new Date(t).toISOString().slice(0, 10));
+  const keys = [];
+  for (const day of dates) {
+    let cursor = undefined;
+    do {
+      const page = await env.SESSIONS.list({ prefix: `sample:${id}:${day}:`, cursor });
+      keys.push(...(page.keys || []).map((key) => key.name));
+      cursor = page.list_complete ? undefined : page.cursor;
+    } while (cursor);
+  }
+  const samples = await Promise.all(keys.map((key) => env.SESSIONS.get(key, "json")));
+  return samples
+    .filter((sample) => sample && sample.at >= after && sample.at <= now)
+    .sort((a, b) => a.at - b.at);
+}
+async function sampleAllMonitors(env) {
+  if (typeof env.SESSIONS.list !== "function") return;
+  const page = await env.SESSIONS.list({ prefix: "monitor:", limit: MONITOR_BATCH_SIZE });
+  await Promise.all(
+    (page.keys || []).map(async (key) => {
+      const id = key.name.slice("monitor:".length),
+        record = await env.SESSIONS.get(key.name, "json");
+      if (record?.enabled && !record.authRequired) await sampleMonitor(env, id, record);
+    }),
+  );
+}
+async function sampleMonitor(env, id, record, now = Date.now()) {
+  if (now - Number(record.lastSampleAt || 0) < SAMPLE_INTERVAL_MS - 30000) return;
+  try {
+    const token = await decryptMonitorToken(record.token, env);
+    const device = (await accountDevices(token)).find(
+      (item) =>
+        item.productKey === record.device.productKey &&
+        item.deviceKey === record.device.deviceKey,
+    );
+    if (!device?.online)
+      throw new CloudError("Станція офлайн: нові вимірювання не отримано.", 503);
+    const raw = await cloudGet(
+      `/v2/binding/enduserapi/getDeviceBusinessAttributes?pk=${encodeURIComponent(record.device.productKey)}&dk=${encodeURIComponent(record.device.deviceKey)}`,
+      token,
+    );
+    const sample = telemetrySample(raw, now);
+    if (!sample) throw new CloudError("Станція не передала вимірювання.", 502);
+    record.lastSampleAt = now;
+    record.lastError = null;
+    record.authRequired = false;
+    await Promise.all([
+      env.SESSIONS.put(sampleKey(id, now), JSON.stringify(sample), {
+        expirationTtl: SAMPLE_TTL,
+      }),
+      putMonitor(env, id, record),
+    ]);
+  } catch (error) {
+    record.lastError =
+      error instanceof CloudError ? error.message : "Не вдалося отримати дані станції.";
+    if (error instanceof CloudError && error.status === 401) record.authRequired = true;
+    await putMonitor(env, id, record);
+  }
+}
+function telemetrySample(payload, at) {
+  const attrs = payload?.data?.customizeTslInfo || payload?.customizeTslInfo || [];
+  const values = Object.fromEntries(attrs.map((item) => [String(item.abId), item.resourceValce]));
+  const number = (id) => {
+    const value = Number(values[id]);
+    return Number.isFinite(value) ? value : null;
+  };
+  const output = number("5"),
+    input = number("4"),
+    soc = number("1");
+  if (output == null || input == null || soc == null) return null;
+  return {
+    at,
+    soc: Math.max(0, Math.min(100, soc)),
+    input: Math.max(0, input),
+    output: Math.max(0, output),
+  };
+}
+async function monitorKey(env) {
+  if (!env.MONITOR_KEY || String(env.MONITOR_KEY).length < 24)
+    throw new CloudError("Фоновий моніторинг ще не налаштований на сервері.", 503);
+  const raw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(env.MONITOR_KEY));
+  return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+function base64url(bytes) {
+  return btoa(String.fromCharCode(...bytes))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
+}
+function fromBase64url(value) {
+  const base64 = String(value).replaceAll("-", "+").replaceAll("_", "/");
+  return Uint8Array.from(atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4)), (char) => char.charCodeAt(0));
+}
+async function encryptMonitorToken(token, env) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    await monitorKey(env),
+    new TextEncoder().encode(token),
+  );
+  return `${base64url(iv)}.${base64url(new Uint8Array(encrypted))}`;
+}
+async function decryptMonitorToken(value, env) {
+  const [iv, encrypted] = String(value || "").split(".");
+  if (!iv || !encrypted) throw new CloudError("Дані моніторингу пошкоджені.", 401);
+  try {
+    const result = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: fromBase64url(iv) },
+      await monitorKey(env),
+      fromBase64url(encrypted),
+    );
+    return new TextDecoder().decode(result);
+  } catch {
+    throw new CloudError("Не вдалося відкрити захищену сесію моніторингу.", 401);
+  }
 }
 async function accountDevices(token) {
   const raw = await cloudGet(

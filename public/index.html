@@ -213,12 +213,27 @@
             ><small id="reserveCopy">з резервом 8%</small>
           </div>
           <div>
-            <span>Ваше навантаження</span><strong id="plannedWatts">0 W</strong
+            <span>Навантаження для прогнозу</span><strong id="plannedWatts">0 W</strong
             ><small id="loadsCount">0 приладів</small>
           </div>
           <div class="accent">
-            <span>Орієнтовно</span><strong id="budgetTime">—</strong>
+            <span id="forecastLabel">За планом</span><strong id="budgetTime">—</strong
+            ><small id="forecastRange">Додайте прилади або увімкніть моніторинг.</small>
           </div>
+        </section>
+        <section class="card adaptive-card">
+          <div class="section-top">
+            <div>
+              <p class="eyebrow">РОЗУМНИЙ ПРОГНОЗ</p>
+              <h2 id="adaptiveTitle">Потрібні вимірювання</h2>
+            </div>
+            <span id="confidenceBadge" class="confidence-badge">—</span>
+          </div>
+          <p id="adaptiveCopy">
+            Увімкніть фоновий моніторинг у налаштуваннях: сервер збиратиме
+            фактичне навантаження кожні 5 хвилин, навіть коли PWA закритий.
+          </p>
+          <div id="calibrationBox" class="calibration-box"></div>
         </section>
         <section class="card reserve-card">
           <div class="section-top">
@@ -290,7 +305,8 @@
         >
           <button data-range="1">1 год</button
           ><button data-range="6">6 год</button
-          ><button data-range="24" class="active">24 год</button>
+          ><button data-range="24" class="active">24 год</button
+          ><button data-range="168">7 днів</button>
         </div>
         <section class="metric-grid">
           <article class="metric">
@@ -485,6 +501,18 @@
             ><input id="alertEnabled" type="checkbox" /><i></i
           ></label>
         </section>
+        <section class="notification-box monitor-box">
+          <div>
+            <b>Фоновий збір фактичного споживання</b
+            ><small id="monitorSettingsCopy"
+              >Сервер зчитує лише телеметрію кожні 5 хвилин, навіть коли
+              застосунок закритий. Команди на станцію не надсилаються.</small
+            >
+          </div>
+          <label class="toggle"
+            ><input id="monitorEnabled" type="checkbox" /><i></i
+          ></label>
+        </section>
         <label id="alertThresholdLabel"
           >Попереджати нижче <strong id="alertThresholdValue">20%</strong
           ><input
@@ -497,8 +525,9 @@
         /></label>
         <div class="privacy-note">
           <b>Приватність.</b> Пароль використовується лише для входу через
-          HTTPS. Cloud token лишається на сервері; історія, плани й налаштування
-          — лише на цьому iPhone.
+          HTTPS. Якщо увімкнути фоновий збір, службовий token шифрується на
+          сервері, а вимірювання зберігаються 14 днів. Плани — лише на цьому
+          iPhone.
         </div>
         <div id="loginStatus" class="login-status" role="status"></div>
         <button type="button" class="secondary-button" id="saveBtn">
