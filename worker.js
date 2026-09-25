@@ -214,6 +214,8 @@ function rowToMonitor(row) {
     createdAt: Number(row.created_at || 0),
     expiresAt: Number(row.expires_at || 0),
     lastSampleAt: row.last_sample_at == null ? null : Number(row.last_sample_at),
+    lastAttemptAt:
+      row.last_attempt_at == null ? null : Number(row.last_attempt_at),
     lastError: row.last_error || null,
     authRequired: Number(row.auth_required) === 1,
   };
@@ -221,7 +223,7 @@ function rowToMonitor(row) {
 async function getMonitor(env, id) {
   if (hasD1(env)) {
     const row = await env.DB.prepare(
-      "SELECT id, account_id, enabled, product_key, device_key, token, created_at, expires_at, last_sample_at, last_error, auth_required FROM monitors WHERE id = ?1",
+      "SELECT id, account_id, enabled, product_key, device_key, token, created_at, expires_at, last_sample_at, last_attempt_at, last_error, auth_required FROM monitors WHERE id = ?1",
     )
       .bind(id)
       .first();
@@ -317,7 +319,7 @@ async function putMonitor(env, id, record) {
 
   if (hasD1(env)) {
     await env.DB.prepare(
-      "INSERT INTO monitors (id, account_id, enabled, product_key, device_key, token, created_at, expires_at, last_sample_at, last_error, auth_required) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT(id) DO UPDATE SET account_id=excluded.account_id, enabled=excluded.enabled, product_key=excluded.product_key, device_key=excluded.device_key, token=excluded.token, created_at=excluded.created_at, expires_at=excluded.expires_at, last_sample_at=excluded.last_sample_at, last_error=excluded.last_error, auth_required=excluded.auth_required",
+      "INSERT INTO monitors (id, account_id, enabled, product_key, device_key, token, created_at, expires_at, last_sample_at, last_attempt_at, last_error, auth_required) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) ON CONFLICT(id) DO UPDATE SET account_id=excluded.account_id, enabled=excluded.enabled, product_key=excluded.product_key, device_key=excluded.device_key, token=excluded.token, created_at=excluded.created_at, expires_at=excluded.expires_at, last_sample_at=excluded.last_sample_at, last_attempt_at=excluded.last_attempt_at, last_error=excluded.last_error, auth_required=excluded.auth_required",
     )
       .bind(
         id,
@@ -329,6 +331,7 @@ async function putMonitor(env, id, record) {
         Number(record.createdAt || now),
         Number(record.expiresAt),
         record.lastSampleAt == null ? null : Number(record.lastSampleAt),
+        record.lastAttemptAt == null ? null : Number(record.lastAttemptAt),
         record.lastError || null,
         record.authRequired ? 1 : 0,
       )
@@ -399,25 +402,7 @@ function evenlySample(items, limit) {
   }
   return out;
 }
-async function samplesForRange(env, id, hours, now = Date.now()) {
-  const after = now - hours * 36e5;
-  if (hasD1(env)) {
-    const result = await env.DB.prepare(
-      "SELECT at, soc, input, output, ac, usb, dc FROM samples WHERE monitor_id = ?1 AND at >= ?2 AND at <= ?3 ORDER BY at ASC LIMIT ?4",
-    )
-      .bind(id, after, now, D1_HISTORY_MAX_POINTS)
-      .all();
-    return (result.results || []).map((row) => ({
-      at: Number(row.at),
-      soc: Number(row.soc),
-      input: Number(row.input),
-      output: Number(row.output),
-      ...(row.ac == null ? {} : { ac: Number(row.ac) === 1 }),
-      ...(row.usb == null ? {} : { usb: Number(row.usb) === 1 }),
-      ...(row.dc == null ? {} : { dc: Number(row.dc) === 1 }),
-    }));
-  }
-
+async function kvSamplesForRange(env, id, after, now) {
   if (typeof env.SESSIONS.list !== "function") return [];
   const dates = new Set();
   for (let t = after; t <= now; t += 864e5)
@@ -435,19 +420,45 @@ async function samplesForRange(env, id, hours, now = Date.now()) {
     } while (cursor);
   }
   keys.sort();
-  const selected = evenlySample(keys, KV_HISTORY_MAX_POINTS);
-  const samples = await Promise.all(
-    selected.map((key) => env.SESSIONS.get(key, "json")),
-  );
+  const selected = evenlySample(keys, KV_HISTORY_MAX_POINTS),
+    samples = await Promise.all(
+      selected.map((key) => env.SESSIONS.get(key, "json")),
+    );
   return samples
     .filter((sample) => sample && sample.at >= after && sample.at <= now)
     .sort((a, b) => a.at - b.at);
+}
+async function samplesForRange(env, id, hours, now = Date.now()) {
+  const after = now - hours * 36e5;
+  if (!hasD1(env)) return await kvSamplesForRange(env, id, after, now);
+
+  const result = await env.DB.prepare(
+    "SELECT at, soc, input, output, ac, usb, dc FROM samples WHERE monitor_id = ?1 AND at >= ?2 AND at <= ?3 ORDER BY at ASC LIMIT ?4",
+  )
+    .bind(id, after, now, D1_HISTORY_MAX_POINTS)
+    .all();
+  const d1Samples = (result.results || []).map((row) => ({
+      at: Number(row.at),
+      soc: Number(row.soc),
+      input: Number(row.input),
+      output: Number(row.output),
+      ...(row.ac == null ? {} : { ac: Number(row.ac) === 1 }),
+      ...(row.usb == null ? {} : { usb: Number(row.usb) === 1 }),
+      ...(row.dc == null ? {} : { dc: Number(row.dc) === 1 }),
+    })),
+    legacySamples = await kvSamplesForRange(env, id, after, now),
+    merged = new Map();
+  for (const sample of legacySamples) merged.set(Number(sample.at), sample);
+  for (const sample of d1Samples) merged.set(Number(sample.at), sample);
+  return [...merged.values()]
+    .sort((a, b) => a.at - b.at)
+    .slice(-D1_HISTORY_MAX_POINTS);
 }
 async function d1DueMonitors(env, now, limit) {
   if (!hasD1(env) || limit <= 0) return [];
   const dueBefore = now - (SAMPLE_INTERVAL_MS - 30000);
   const result = await env.DB.prepare(
-    "SELECT id, account_id, enabled, product_key, device_key, token, created_at, expires_at, last_sample_at, last_error, auth_required FROM monitors WHERE enabled = 1 AND auth_required = 0 AND expires_at > ?1 AND (last_sample_at IS NULL OR last_sample_at <= ?2) ORDER BY COALESCE(last_sample_at, 0) ASC, created_at ASC LIMIT ?3",
+    "SELECT id, account_id, enabled, product_key, device_key, token, created_at, expires_at, last_sample_at, last_attempt_at, last_error, auth_required FROM monitors WHERE enabled = 1 AND auth_required = 0 AND expires_at > ?1 AND COALESCE(last_attempt_at, last_sample_at, 0) <= ?2 ORDER BY COALESCE(last_attempt_at, last_sample_at, 0) ASC, created_at ASC LIMIT ?3",
   )
     .bind(now, dueBefore, limit)
     .all();
@@ -467,7 +478,8 @@ async function kvDueMonitors(env, now, limit) {
     },
     page = await env.SESSIONS.list(options);
 
-  if (page.list_complete) await env.SESSIONS.delete(cursorKey);
+  if (page.list_complete && savedCursor)
+    await env.SESSIONS.delete(cursorKey);
   else if (page.cursor)
     await env.SESSIONS.put(cursorKey, page.cursor, {
       expirationTtl: 24 * 60 * 60,
@@ -485,13 +497,14 @@ async function kvDueMonitors(env, now, limit) {
         record?.enabled &&
         !record.authRequired &&
         (!record.expiresAt || Number(record.expiresAt) > now) &&
-        now - Number(record.lastSampleAt || 0) >=
+        now -
+            Number(record.lastAttemptAt || record.lastSampleAt || 0) >=
           SAMPLE_INTERVAL_MS - 30000,
     )
     .sort(
       (a, b) =>
-        Number(a.record.lastSampleAt || 0) -
-        Number(b.record.lastSampleAt || 0),
+        Number(a.record.lastAttemptAt || a.record.lastSampleAt || 0) -
+        Number(b.record.lastAttemptAt || b.record.lastSampleAt || 0),
     )
     .slice(0, limit);
 }
@@ -560,7 +573,10 @@ async function sampleMonitor(env, id, record, now = Date.now()) {
     await deleteMonitorById(env, id);
     return;
   }
-  if (now - Number(record.lastSampleAt || 0) < SAMPLE_INTERVAL_MS - 30000)
+  if (
+    now - Number(record.lastAttemptAt || record.lastSampleAt || 0) <
+    SAMPLE_INTERVAL_MS - 30000
+  )
     return;
   try {
     const token = await decryptMonitorToken(record.token, env),
@@ -582,11 +598,18 @@ async function sampleMonitor(env, id, record, now = Date.now()) {
     if (!sample) throw new CloudError("Станція не передала вимірювання.", 502);
 
     record.lastSampleAt = now;
+    record.lastAttemptAt = now;
     record.lastError = null;
     record.authRequired = false;
-    await storeSample(env, id, sample);
-    await putMonitor(env, id, record);
+    if (hasD1(env)) {
+      await putMonitor(env, id, record);
+      await storeSample(env, id, sample);
+    } else {
+      await storeSample(env, id, sample);
+      await putMonitor(env, id, record);
+    }
   } catch (error) {
+    record.lastAttemptAt = now;
     record.lastError =
       error instanceof CloudError
         ? error.message
