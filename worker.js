@@ -870,8 +870,31 @@ function validDeviceId(value) {
   return typeof value === "string" && /^[A-Za-z0-9_-]{1,96}$/.test(value);
 }
 async function takeLoginAttempt(request, env) {
-  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
-  const key = "rate:login:" + (await sha256hex(ip));
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown",
+    hash = await sha256hex(ip),
+    key = "rate:login:" + hash;
+
+  if (hasD1(env)) {
+    const now = Math.floor(Date.now() / 1000),
+      resetAt = now + LOGIN_WINDOW_SECONDS;
+    await env.DB.prepare(
+      "INSERT INTO login_rate (key, count, reset_at) VALUES (?1, 1, ?2) ON CONFLICT(key) DO UPDATE SET count = CASE WHEN login_rate.reset_at <= ?3 THEN 1 ELSE login_rate.count + 1 END, reset_at = CASE WHEN login_rate.reset_at <= ?3 THEN excluded.reset_at ELSE login_rate.reset_at END",
+    )
+      .bind(hash, resetAt, now)
+      .run();
+    const row = await env.DB.prepare(
+      "SELECT count, reset_at FROM login_rate WHERE key = ?1",
+    )
+      .bind(hash)
+      .first();
+    if (Number(row?.count || 0) > LOGIN_MAX_ATTEMPTS)
+      throw new CloudError(
+        "Забагато спроб входу. Спробуйте знову через 15 хвилин.",
+        429,
+      );
+    return { kind: "d1", key: hash };
+  }
+
   const used = Number((await env.SESSIONS.get(key)) || 0);
   if (used >= LOGIN_MAX_ATTEMPTS)
     throw new CloudError(
@@ -881,7 +904,17 @@ async function takeLoginAttempt(request, env) {
   await env.SESSIONS.put(key, String(used + 1), {
     expirationTtl: LOGIN_WINDOW_SECONDS,
   });
-  return key;
+  return { kind: "kv", key };
+}
+async function clearLoginAttempt(rate, env) {
+  if (!rate) return;
+  if (rate.kind === "d1" && hasD1(env)) {
+    await env.DB.prepare("DELETE FROM login_rate WHERE key = ?1")
+      .bind(rate.key)
+      .run();
+    return;
+  }
+  if (rate.kind === "kv") await env.SESSIONS.delete(rate.key);
 }
 function randomString(length) {
   const chars =
