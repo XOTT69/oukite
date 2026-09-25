@@ -165,7 +165,12 @@ function monitorCookie(request) {
   return /^[A-Za-z0-9_-]{40,}$/.test(id) ? id : "";
 }
 function monitorCookieHeader(id, maxAge = MONITOR_TTL) {
-  return `oukitel_monitor=${id || ""}; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=${maxAge}`;
+  return (
+    "oukitel_monitor=" +
+    (id || "") +
+    "; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=" +
+    maxAge
+  );
 }
 function publicMonitor(record) {
   if (!record)
@@ -193,26 +198,74 @@ function publicMonitor(record) {
       : null,
   };
 }
-async function monitorFor(request, env) {
+function hasD1(env) {
+  return !!env.DB && typeof env.DB.prepare === "function";
+}
+function rowToMonitor(row) {
+  if (!row) return null;
+  return {
+    enabled: Number(row.enabled) === 1,
+    accountId: row.account_id || null,
+    device:
+      row.product_key && row.device_key
+        ? { productKey: row.product_key, deviceKey: row.device_key }
+        : null,
+    token: row.token || "",
+    createdAt: Number(row.created_at || 0),
+    expiresAt: Number(row.expires_at || 0),
+    lastSampleAt: row.last_sample_at == null ? null : Number(row.last_sample_at),
+    lastError: row.last_error || null,
+    authRequired: Number(row.auth_required) === 1,
+  };
+}
+async function getMonitor(env, id) {
+  if (hasD1(env)) {
+    const row = await env.DB.prepare(
+      "SELECT id, account_id, enabled, product_key, device_key, token, created_at, expires_at, last_sample_at, last_error, auth_required FROM monitors WHERE id = ?1",
+    )
+      .bind(id)
+      .first();
+    if (row) return rowToMonitor(row);
+  }
+  return await env.SESSIONS.get("monitor:" + id, "json");
+}
+async function monitorFor(request, env, session) {
   const id = monitorCookie(request);
   if (!id) return { id: "", record: null };
-  return { id, record: await env.SESSIONS.get(`monitor:${id}`, "json") };
+  const record = await getMonitor(env, id);
+  if (!record) return { id: "", record: null };
+
+  if (record.expiresAt && record.expiresAt <= Date.now()) {
+    await deleteMonitorById(env, id);
+    return { id: "", record: null };
+  }
+
+  if (record.accountId) {
+    if (!session?.accountId || record.accountId !== session.accountId)
+      return { id: "", record: null };
+  } else if (session?.accountId) {
+    record.accountId = session.accountId;
+    await putMonitor(env, id, record);
+  }
+  return { id, record };
 }
-async function monitorStatus(request, env) {
-  const { record } = await monitorFor(request, env);
+async function monitorStatus(request, env, session) {
+  const { record } = await monitorFor(request, env, session);
   return json({ monitor: publicMonitor(record) });
 }
 async function configureMonitor(request, env, session) {
   const input = await readJson(request);
   if (input.enabled !== true && input.enabled !== false)
     throw new CloudError("Вкажіть, чи має працювати фоновий моніторинг.", 400);
-  const existing = await monitorFor(request, env);
+
+  const existing = await monitorFor(request, env, session);
   if (!input.enabled) {
-    await deleteMonitor(request, env);
+    if (existing.id) await deleteMonitorById(env, existing.id);
     const response = json({ monitor: publicMonitor(null) });
     response.headers.set("Set-Cookie", monitorCookieHeader("", 0));
     return response;
   }
+
   const productKey = String(input.productKey || ""),
     deviceKey = String(input.deviceKey || "");
   if (!validDeviceId(productKey) || !validDeviceId(deviceKey))
@@ -221,39 +274,91 @@ async function configureMonitor(request, env, session) {
     (item) => item.productKey === productKey && item.deviceKey === deviceKey,
   );
   if (!device) throw new CloudError("Станція не знайдена у вашому акаунті.", 403);
-  const id = existing.id || randomId();
-  const record = {
-    enabled: true,
-    device: { productKey: device.productKey, deviceKey: device.deviceKey },
-    token: await encryptMonitorToken(session.token, env),
-    createdAt: existing.record?.createdAt || Date.now(),
-    lastSampleAt: existing.record?.lastSampleAt || null,
-    lastError: null,
-    authRequired: false,
-  };
+
+  const id = existing.id || randomId(),
+    now = Date.now(),
+    record = {
+      enabled: true,
+      accountId: session.accountId || existing.record?.accountId || null,
+      device: { productKey: device.productKey, deviceKey: device.deviceKey },
+      token: await encryptMonitorToken(session.token, env),
+      createdAt: existing.record?.createdAt || now,
+      expiresAt: now + MONITOR_TTL * 1000,
+      lastSampleAt: existing.record?.lastSampleAt || null,
+      lastError: null,
+      authRequired: false,
+    };
   await putMonitor(env, id, record);
   const response = json({ monitor: publicMonitor(record) });
   response.headers.set("Set-Cookie", monitorCookieHeader(id));
   return response;
 }
-async function refreshMonitorToken(request, env, token) {
-  const { id, record } = await monitorFor(request, env);
+async function refreshMonitorToken(request, env, token, accountId) {
+  const { id, record } = await monitorFor(request, env, {
+    token,
+    accountId,
+  });
   if (!id || !record?.enabled) return;
   record.token = await encryptMonitorToken(token, env);
+  record.accountId = accountId || record.accountId || null;
+  record.expiresAt = Date.now() + MONITOR_TTL * 1000;
   record.authRequired = false;
   record.lastError = null;
   await putMonitor(env, id, record);
 }
 async function putMonitor(env, id, record) {
-  await env.SESSIONS.put(`monitor:${id}`, JSON.stringify(record), {
-    expirationTtl: MONITOR_TTL,
+  const now = Date.now();
+  if (!record.expiresAt)
+    record.expiresAt = now + MONITOR_TTL * 1000;
+  if (record.expiresAt <= now) {
+    await deleteMonitorById(env, id);
+    return;
+  }
+
+  if (hasD1(env)) {
+    await env.DB.prepare(
+      "INSERT INTO monitors (id, account_id, enabled, product_key, device_key, token, created_at, expires_at, last_sample_at, last_error, auth_required) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT(id) DO UPDATE SET account_id=excluded.account_id, enabled=excluded.enabled, product_key=excluded.product_key, device_key=excluded.device_key, token=excluded.token, created_at=excluded.created_at, expires_at=excluded.expires_at, last_sample_at=excluded.last_sample_at, last_error=excluded.last_error, auth_required=excluded.auth_required",
+    )
+      .bind(
+        id,
+        record.accountId || null,
+        record.enabled ? 1 : 0,
+        record.device?.productKey || null,
+        record.device?.deviceKey || null,
+        record.token || "",
+        Number(record.createdAt || now),
+        Number(record.expiresAt),
+        record.lastSampleAt == null ? null : Number(record.lastSampleAt),
+        record.lastError || null,
+        record.authRequired ? 1 : 0,
+      )
+      .run();
+    await env.SESSIONS.delete("monitor:" + id);
+    return;
+  }
+
+  const ttl = Math.max(
+    60,
+    Math.ceil((Number(record.expiresAt) - now) / 1000),
+  );
+  await env.SESSIONS.put("monitor:" + id, JSON.stringify(record), {
+    expirationTtl: ttl,
   });
 }
-async function deleteMonitor(request, env) {
-  const id = monitorCookie(request);
+async function deleteMonitor(request, env, session) {
+  const { id } = await monitorFor(request, env, session);
+  if (id) await deleteMonitorById(env, id);
+}
+async function deleteMonitorById(env, id) {
   if (!id) return;
-  await env.SESSIONS.delete(`monitor:${id}`);
-  await deletePrefix(env, `sample:${id}:`);
+  if (hasD1(env)) {
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM samples WHERE monitor_id = ?1").bind(id),
+      env.DB.prepare("DELETE FROM monitors WHERE id = ?1").bind(id),
+    ]);
+  }
+  await env.SESSIONS.delete("monitor:" + id);
+  await deletePrefix(env, "sample:" + id + ":");
 }
 async function deletePrefix(env, prefix) {
   if (typeof env.SESSIONS.list !== "function") return;
@@ -264,103 +369,281 @@ async function deletePrefix(env, prefix) {
     cursor = page.list_complete ? undefined : page.cursor;
   } while (cursor);
 }
-async function monitorHistory(request, env, url) {
-  const { id, record } = await monitorFor(request, env);
-  if (!id || !record?.enabled) return json({ samples: [], monitor: publicMonitor(record) });
-  const hours = Math.min(168, Math.max(1, Number(url.searchParams.get("hours")) || 24));
+async function monitorHistory(request, env, url, session) {
+  const { id, record } = await monitorFor(request, env, session);
+  if (!id || !record?.enabled)
+    return json({ samples: [], monitor: publicMonitor(record) });
+  const hours = Math.min(
+    168,
+    Math.max(1, Number(url.searchParams.get("hours")) || 24),
+  );
   const samples = await samplesForRange(env, id, hours);
   return json({ samples, monitor: publicMonitor(record) });
 }
 function sampleKey(id, at) {
-  return `sample:${id}:${new Date(at).toISOString().slice(0, 10)}:${String(at).padStart(13, "0")}`;
+  return (
+    "sample:" +
+    id +
+    ":" +
+    new Date(at).toISOString().slice(0, 10) +
+    ":" +
+    String(at).padStart(13, "0")
+  );
+}
+function evenlySample(items, limit) {
+  if (items.length <= limit) return items;
+  const out = [];
+  for (let i = 0; i < limit; i++) {
+    const index = Math.round((i * (items.length - 1)) / (limit - 1));
+    out.push(items[index]);
+  }
+  return out;
 }
 async function samplesForRange(env, id, hours, now = Date.now()) {
+  const after = now - hours * 36e5;
+  if (hasD1(env)) {
+    const result = await env.DB.prepare(
+      "SELECT at, soc, input, output, ac, usb, dc FROM samples WHERE monitor_id = ?1 AND at >= ?2 AND at <= ?3 ORDER BY at ASC LIMIT ?4",
+    )
+      .bind(id, after, now, D1_HISTORY_MAX_POINTS)
+      .all();
+    return (result.results || []).map((row) => ({
+      at: Number(row.at),
+      soc: Number(row.soc),
+      input: Number(row.input),
+      output: Number(row.output),
+      ...(row.ac == null ? {} : { ac: Number(row.ac) === 1 }),
+      ...(row.usb == null ? {} : { usb: Number(row.usb) === 1 }),
+      ...(row.dc == null ? {} : { dc: Number(row.dc) === 1 }),
+    }));
+  }
+
   if (typeof env.SESSIONS.list !== "function") return [];
-  const after = now - hours * 36e5,
-    dates = new Set();
+  const dates = new Set();
   for (let t = after; t <= now; t += 864e5)
     dates.add(new Date(t).toISOString().slice(0, 10));
   const keys = [];
   for (const day of dates) {
     let cursor = undefined;
     do {
-      const page = await env.SESSIONS.list({ prefix: `sample:${id}:${day}:`, cursor });
+      const page = await env.SESSIONS.list({
+        prefix: "sample:" + id + ":" + day + ":",
+        cursor,
+      });
       keys.push(...(page.keys || []).map((key) => key.name));
       cursor = page.list_complete ? undefined : page.cursor;
     } while (cursor);
   }
-  const samples = await Promise.all(keys.map((key) => env.SESSIONS.get(key, "json")));
+  keys.sort();
+  const selected = evenlySample(keys, KV_HISTORY_MAX_POINTS);
+  const samples = await Promise.all(
+    selected.map((key) => env.SESSIONS.get(key, "json")),
+  );
   return samples
     .filter((sample) => sample && sample.at >= after && sample.at <= now)
     .sort((a, b) => a.at - b.at);
 }
-async function sampleAllMonitors(env) {
-  if (typeof env.SESSIONS.list !== "function") return;
-  const page = await env.SESSIONS.list({ prefix: "monitor:", limit: MONITOR_BATCH_SIZE });
-  await Promise.all(
-    (page.keys || []).map(async (key) => {
-      const id = key.name.slice("monitor:".length),
-        record = await env.SESSIONS.get(key.name, "json");
-      if (record?.enabled && !record.authRequired) await sampleMonitor(env, id, record);
-    }),
+async function d1DueMonitors(env, now, limit) {
+  if (!hasD1(env) || limit <= 0) return [];
+  const dueBefore = now - (SAMPLE_INTERVAL_MS - 30000);
+  const result = await env.DB.prepare(
+    "SELECT id, account_id, enabled, product_key, device_key, token, created_at, expires_at, last_sample_at, last_error, auth_required FROM monitors WHERE enabled = 1 AND auth_required = 0 AND expires_at > ?1 AND (last_sample_at IS NULL OR last_sample_at <= ?2) ORDER BY COALESCE(last_sample_at, 0) ASC, created_at ASC LIMIT ?3",
+  )
+    .bind(now, dueBefore, limit)
+    .all();
+  return (result.results || []).map((row) => ({
+    id: row.id,
+    record: rowToMonitor(row),
+  }));
+}
+async function kvDueMonitors(env, now, limit) {
+  if (limit <= 0 || typeof env.SESSIONS.list !== "function") return [];
+  const cursorKey = "meta:monitor-scan-cursor",
+    savedCursor = await env.SESSIONS.get(cursorKey),
+    options = {
+      prefix: "monitor:",
+      limit: KV_MONITOR_SCAN_SIZE,
+      ...(savedCursor ? { cursor: savedCursor } : {}),
+    },
+    page = await env.SESSIONS.list(options);
+
+  if (page.list_complete) await env.SESSIONS.delete(cursorKey);
+  else if (page.cursor)
+    await env.SESSIONS.put(cursorKey, page.cursor, {
+      expirationTtl: 24 * 60 * 60,
+    });
+
+  const entries = await Promise.all(
+    (page.keys || []).map(async (key) => ({
+      id: key.name.slice("monitor:".length),
+      record: await env.SESSIONS.get(key.name, "json"),
+    })),
   );
+  return entries
+    .filter(
+      ({ record }) =>
+        record?.enabled &&
+        !record.authRequired &&
+        (!record.expiresAt || Number(record.expiresAt) > now) &&
+        now - Number(record.lastSampleAt || 0) >=
+          SAMPLE_INTERVAL_MS - 30000,
+    )
+    .sort(
+      (a, b) =>
+        Number(a.record.lastSampleAt || 0) -
+        Number(b.record.lastSampleAt || 0),
+    )
+    .slice(0, limit);
+}
+async function cleanupD1(env, now) {
+  if (!hasD1(env)) return;
+  const sampleCutoff = now - SAMPLE_TTL * 1000,
+    loginCutoff = Math.floor(now / 1000) - LOGIN_WINDOW_SECONDS * 2;
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM samples WHERE at < ?1").bind(sampleCutoff),
+    env.DB.prepare(
+      "DELETE FROM samples WHERE monitor_id IN (SELECT id FROM monitors WHERE expires_at <= ?1)",
+    ).bind(now),
+    env.DB.prepare("DELETE FROM monitors WHERE expires_at <= ?1").bind(now),
+    env.DB.prepare("DELETE FROM login_rate WHERE reset_at < ?1").bind(loginCutoff),
+  ]);
+}
+async function sampleAllMonitors(env) {
+  const now = Date.now();
+  await cleanupD1(env, now);
+
+  const d1 = await d1DueMonitors(env, now, MONITOR_BATCH_SIZE),
+    used = new Set(d1.map((item) => item.id)),
+    legacy = await kvDueMonitors(
+      env,
+      now,
+      Math.max(0, MONITOR_BATCH_SIZE - d1.length),
+    ),
+    queue = [
+      ...d1,
+      ...legacy.filter((item) => !used.has(item.id)),
+    ].slice(0, MONITOR_BATCH_SIZE);
+
+  for (let offset = 0; offset < queue.length; offset += 5) {
+    await Promise.all(
+      queue
+        .slice(offset, offset + 5)
+        .map(({ id, record }) => sampleMonitor(env, id, record, now)),
+    );
+  }
+}
+async function storeSample(env, id, sample) {
+  if (hasD1(env)) {
+    await env.DB.prepare(
+      "INSERT INTO samples (monitor_id, at, soc, input, output, ac, usb, dc) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(monitor_id, at) DO UPDATE SET soc=excluded.soc, input=excluded.input, output=excluded.output, ac=excluded.ac, usb=excluded.usb, dc=excluded.dc",
+    )
+      .bind(
+        id,
+        sample.at,
+        sample.soc,
+        sample.input,
+        sample.output,
+        sample.ac == null ? null : sample.ac ? 1 : 0,
+        sample.usb == null ? null : sample.usb ? 1 : 0,
+        sample.dc == null ? null : sample.dc ? 1 : 0,
+      )
+      .run();
+    return;
+  }
+  await env.SESSIONS.put(sampleKey(id, sample.at), JSON.stringify(sample), {
+    expirationTtl: SAMPLE_TTL,
+  });
 }
 async function sampleMonitor(env, id, record, now = Date.now()) {
-  if (now - Number(record.lastSampleAt || 0) < SAMPLE_INTERVAL_MS - 30000) return;
+  if (!record?.enabled) return;
+  if (record.expiresAt && Number(record.expiresAt) <= now) {
+    await deleteMonitorById(env, id);
+    return;
+  }
+  if (now - Number(record.lastSampleAt || 0) < SAMPLE_INTERVAL_MS - 30000)
+    return;
   try {
-    const token = await decryptMonitorToken(record.token, env);
-    const device = (await accountDevices(token)).find(
-      (item) =>
-        item.productKey === record.device.productKey &&
-        item.deviceKey === record.device.deviceKey,
-    );
+    const token = await decryptMonitorToken(record.token, env),
+      device = (await accountDevices(token)).find(
+        (item) =>
+          item.productKey === record.device.productKey &&
+          item.deviceKey === record.device.deviceKey,
+      );
     if (!device?.online)
       throw new CloudError("Станція офлайн: нові вимірювання не отримано.", 503);
     const raw = await cloudGet(
-      `/v2/binding/enduserapi/getDeviceBusinessAttributes?pk=${encodeURIComponent(record.device.productKey)}&dk=${encodeURIComponent(record.device.deviceKey)}`,
+      "/v2/binding/enduserapi/getDeviceBusinessAttributes?pk=" +
+        encodeURIComponent(record.device.productKey) +
+        "&dk=" +
+        encodeURIComponent(record.device.deviceKey),
       token,
     );
     const sample = telemetrySample(raw, now);
     if (!sample) throw new CloudError("Станція не передала вимірювання.", 502);
+
     record.lastSampleAt = now;
     record.lastError = null;
     record.authRequired = false;
-    await Promise.all([
-      env.SESSIONS.put(sampleKey(id, now), JSON.stringify(sample), {
-        expirationTtl: SAMPLE_TTL,
-      }),
-      putMonitor(env, id, record),
-    ]);
+    await storeSample(env, id, sample);
+    await putMonitor(env, id, record);
   } catch (error) {
     record.lastError =
-      error instanceof CloudError ? error.message : "Не вдалося отримати дані станції.";
-    if (error instanceof CloudError && error.status === 401) record.authRequired = true;
+      error instanceof CloudError
+        ? error.message
+        : "Не вдалося отримати дані станції.";
+    if (error instanceof CloudError && error.status === 401)
+      record.authRequired = true;
     await putMonitor(env, id, record);
   }
 }
 function telemetrySample(payload, at) {
-  const attrs = payload?.data?.customizeTslInfo || payload?.customizeTslInfo || [];
-  const values = Object.fromEntries(attrs.map((item) => [String(item.abId), item.resourceValce]));
-  const number = (id) => {
-    const value = Number(values[id]);
-    return Number.isFinite(value) ? value : null;
-  };
-  const output = number("5"),
+  const attrs =
+      payload?.data?.customizeTslInfo || payload?.customizeTslInfo || [],
+    values = Object.fromEntries(
+      attrs.map((item) => [String(item.abId), item.resourceValce]),
+    ),
+    number = (id) => {
+      const value = Number(values[id]);
+      return Number.isFinite(value) ? value : null;
+    },
+    bool = (id) =>
+      values[id] == null
+        ? null
+        : [true, 1, "1", "true"].includes(values[id]),
+    output = number("5"),
     input = number("4"),
     soc = number("1");
+
   if (output == null || input == null || soc == null) return null;
-  return {
+  const sample = {
     at,
     soc: Math.max(0, Math.min(100, soc)),
     input: Math.max(0, input),
     output: Math.max(0, output),
   };
+  for (const [id, key] of Object.entries({ 43: "ac", 44: "usb", 46: "dc" })) {
+    const value = bool(id);
+    if (value != null) sample[key] = value;
+  }
+  return sample;
+}
+function hasServerKey(env) {
+  return !!env.MONITOR_KEY && String(env.MONITOR_KEY).length >= 24;
 }
 async function monitorKey(env) {
-  if (!env.MONITOR_KEY || String(env.MONITOR_KEY).length < 24)
+  if (!hasServerKey(env))
     throw new CloudError("Фоновий моніторинг ще не налаштований на сервері.", 503);
-  const raw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(env.MONITOR_KEY));
-  return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  const raw = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(env.MONITOR_KEY),
+  );
+  return crypto.subtle.importKey(
+    "raw",
+    raw,
+    { name: "AES-GCM" },
+    false,
+    ["encrypt", "decrypt"],
+  );
 }
 function base64url(bytes) {
   return btoa(String.fromCharCode(...bytes))
@@ -370,31 +653,55 @@ function base64url(bytes) {
 }
 function fromBase64url(value) {
   const base64 = String(value).replaceAll("-", "+").replaceAll("_", "/");
-  return Uint8Array.from(atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4)), (char) => char.charCodeAt(0));
+  return Uint8Array.from(
+    atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4)),
+    (char) => char.charCodeAt(0),
+  );
+}
+async function encryptSecret(value, env) {
+  const iv = crypto.getRandomValues(new Uint8Array(12)),
+    encrypted = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      await monitorKey(env),
+      new TextEncoder().encode(value),
+    );
+  return base64url(iv) + "." + base64url(new Uint8Array(encrypted));
+}
+async function decryptSecret(value, env) {
+  const [iv, encrypted] = String(value || "").split(".");
+  if (!iv || !encrypted) throw new Error("Malformed encrypted secret");
+  const result = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: fromBase64url(iv) },
+    await monitorKey(env),
+    fromBase64url(encrypted),
+  );
+  return new TextDecoder().decode(result);
+}
+async function protectSessionToken(token, env) {
+  if (!hasServerKey(env)) return token;
+  return "enc." + (await encryptSecret(token, env));
+}
+async function unprotectSessionToken(value, env) {
+  const token = String(value || "");
+  if (token.startsWith("Bearer ")) return token;
+  if (token.startsWith("enc."))
+    return await decryptSecret(token.slice(4), env);
+  return token;
 }
 async function encryptMonitorToken(token, env) {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encrypted = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    await monitorKey(env),
-    new TextEncoder().encode(token),
-  );
-  return `${base64url(iv)}.${base64url(new Uint8Array(encrypted))}`;
+  return await encryptSecret(token, env);
 }
 async function decryptMonitorToken(value, env) {
-  const [iv, encrypted] = String(value || "").split(".");
-  if (!iv || !encrypted) throw new CloudError("Дані моніторингу пошкоджені.", 401);
   try {
-    const result = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: fromBase64url(iv) },
-      await monitorKey(env),
-      fromBase64url(encrypted),
-    );
-    return new TextDecoder().decode(result);
+    return await decryptSecret(value, env);
   } catch {
-    throw new CloudError("Не вдалося відкрити захищену сесію моніторингу.", 401);
+    throw new CloudError(
+      "Не вдалося відкрити захищену сесію моніторингу.",
+      401,
+    );
   }
 }
+
 async function accountDevices(token) {
   const raw = await cloudGet(
     "/v2/binding/enduserapi/userDeviceList?pageNumber=1&pageSize=50",
