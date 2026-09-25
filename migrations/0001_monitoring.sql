@@ -10,12 +10,13 @@ CREATE TABLE IF NOT EXISTS monitors (
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
   last_sample_at INTEGER,
+  last_attempt_at INTEGER,
   last_error TEXT,
   auth_required INTEGER NOT NULL DEFAULT 0 CHECK (auth_required IN (0, 1))
 );
 
 CREATE INDEX IF NOT EXISTS idx_monitors_due
-  ON monitors(enabled, auth_required, last_sample_at, expires_at);
+  ON monitors(enabled, auth_required, last_attempt_at, last_sample_at, expires_at);
 
 CREATE TABLE IF NOT EXISTS samples (
   monitor_id TEXT NOT NULL,
