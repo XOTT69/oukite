@@ -201,6 +201,9 @@ test("background monitor encrypts its cloud token and records telemetry while th
             { abId: 1, resourceValce: "75" },
             { abId: 4, resourceValce: "12" },
             { abId: 5, resourceValce: "43" },
+            { abId: 43, resourceValce: "true" },
+            { abId: 44, resourceValce: "false" },
+            { abId: 46, resourceValce: "true" },
           ],
         },
       });
@@ -216,6 +219,11 @@ test("background monitor encrypts its cloud token and records telemetry while th
       env,
     );
     const sessionCookie = login.headers.get("set-cookie").split(";")[0];
+    const storedSession = [...env.SESSIONS.values.entries()].find(([key]) =>
+      key.startsWith("session:"),
+    )[1];
+    assert.doesNotMatch(storedSession, /monitor-token/);
+
     const configured = await worker.fetch(
       request("/api/monitor", {
         method: "POST",
@@ -244,7 +252,130 @@ test("background monitor encrypts its cloud token and records telemetry while th
       soc: 75,
       input: 12,
       output: 43,
+      ac: true,
+      usb: false,
+      dc: true,
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
+test("monitor cookies are account-bound and expired leases are removed", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    const endpoint = String(url);
+    if (endpoint.includes("emailPwdLogin")) {
+      const email = new URLSearchParams(String(options.body || "")).get("email");
+      return json({
+        code: 0,
+        data: { accessToken: { token: email === "owner@example.com" ? "owner-token" : "other-token" } },
+      });
+    }
+    if (endpoint.includes("userDeviceList"))
+      return json({
+        code: 0,
+        data: {
+          list: [
+            {
+              productKey: "p11wN7",
+              deviceKey: "device_test_001",
+              productName: "P2001E Plus",
+              online: 1,
+            },
+          ],
+        },
+      });
+    throw Error("Unexpected vendor endpoint: " + endpoint);
+  };
+
+  try {
+    const env = {
+      SESSIONS: new MemoryKV(),
+      MONITOR_KEY: "test-monitor-secret-that-is-long-enough",
+    };
+
+    const ownerLogin = await worker.fetch(
+      request("/api/login", {
+        method: "POST",
+        body: JSON.stringify({
+          email: "owner@example.com",
+          password: "safe-test",
+        }),
+      }),
+      env,
+    );
+    const ownerSession = ownerLogin.headers.get("set-cookie").split(";")[0];
+
+    const configured = await worker.fetch(
+      request("/api/monitor", {
+        method: "POST",
+        headers: { Cookie: ownerSession },
+        body: JSON.stringify({
+          enabled: true,
+          productKey: "p11wN7",
+          deviceKey: "device_test_001",
+        }),
+      }),
+      env,
+    );
+    const monitorCookie = configured.headers.get("set-cookie").split(";")[0];
+    assert.equal((await configured.json()).monitor.enabled, true);
+
+    const otherLogin = await worker.fetch(
+      request("/api/login", {
+        method: "POST",
+        body: JSON.stringify({
+          email: "other@example.com",
+          password: "safe-test",
+        }),
+      }),
+      env,
+    );
+    const otherSession = otherLogin.headers.get("set-cookie").split(";")[0];
+
+    const stolenRead = await worker.fetch(
+      request("/api/monitor", {
+        headers: { Cookie: otherSession + "; " + monitorCookie },
+      }),
+      env,
+    );
+    assert.equal((await stolenRead.json()).monitor.enabled, false);
+
+    const stolenDisable = await worker.fetch(
+      request("/api/monitor", {
+        method: "POST",
+        headers: { Cookie: otherSession + "; " + monitorCookie },
+        body: JSON.stringify({ enabled: false }),
+      }),
+      env,
+    );
+    assert.equal((await stolenDisable.json()).monitor.enabled, false);
+
+    const ownerStillHasMonitor = await worker.fetch(
+      request("/api/monitor", {
+        headers: { Cookie: ownerSession + "; " + monitorCookie },
+      }),
+      env,
+    );
+    assert.equal((await ownerStillHasMonitor.json()).monitor.enabled, true);
+
+    const monitorEntry = [...env.SESSIONS.values.entries()].find(([key]) =>
+      key.startsWith("monitor:"),
+    );
+    const expired = JSON.parse(monitorEntry[1]);
+    expired.expiresAt = Date.now() - 1;
+    env.SESSIONS.values.set(monitorEntry[0], JSON.stringify(expired));
+
+    const expiredRead = await worker.fetch(
+      request("/api/monitor", {
+        headers: { Cookie: ownerSession + "; " + monitorCookie },
+      }),
+      env,
+    );
+    assert.equal((await expiredRead.json()).monitor.enabled, false);
+    assert.equal(env.SESSIONS.values.has(monitorEntry[0]), false);
   } finally {
     globalThis.fetch = originalFetch;
   }
