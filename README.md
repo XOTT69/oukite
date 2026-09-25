@@ -13,11 +13,12 @@
 - план автономності, профілі «Ніч», «Робота», «Блекаут», «Котел», власні прилади, калібрування окремого навантаження та резерв батареї;
 - діагностика, великий текст, експорт та імпорт локальних планів і історії;
 - PWA/offline shell, без кешування будь-яких API-відповідей;
-- server-side сесія Cloudflare KV з `HttpOnly`, `Secure`, `SameSite=Strict` cookie;\n- D1 для фонового моніторингу, історії та атомарного login rate-limit; без D1 лишається KV fallback для одного/кількох власних пристроїв;
+- server-side сесія Cloudflare KV з `HttpOnly`, `Secure`, `SameSite=Strict` cookie;
+- D1 для фонового моніторингу, історії та атомарного login rate-limit; без D1 лишається KV fallback для одного/кількох власних пристроїв;
 - cloud read-only: endpoint-и для write-команд навмисно відсутні.
 
-Інтерфейс фіксує випадкове масштабування на iPhone (maximum-scale=1,
-user-scalable=no), але не заважає системним можливостям доступності iOS.
+Інтерфейс навмисно фіксує масштабування на iPhone (`maximum-scale=1`,
+`user-scalable=no`) — цей контракт залишено без змін.
 
 `productKey` для P2001E Plus: `p11wN7`. Це підтверджено в [публічному reverse-engineering проєкті](https://github.com/bordeux/ha-oukitel-powerstation/blob/master/REVERSE_ENGINEERING.md). `deviceKey` вибирається з вашого акаунта після входу — вручну вводити його не потрібно.
 
