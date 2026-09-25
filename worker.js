@@ -11,8 +11,10 @@ const LOGIN_MAX_ATTEMPTS = 5;
 const MONITOR_TTL = 60 * 60 * 24 * 31;
 const SAMPLE_TTL = 60 * 60 * 24 * 14;
 const SAMPLE_INTERVAL_MS = 5 * 60 * 1000;
-const SAMPLE_MAX_GAP_MS = 12 * 60 * 1000;
-const MONITOR_BATCH_SIZE = 25;
+const MONITOR_BATCH_SIZE = 20;
+const KV_MONITOR_SCAN_SIZE = 100;
+const KV_HISTORY_MAX_POINTS = 720;
+const D1_HISTORY_MAX_POINTS = 2400;
 const SECURITY_HEADERS = {
   "Content-Security-Policy":
     "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests",
@@ -43,7 +45,12 @@ export default {
       );
     try {
       if (url.pathname === "/api/health" && request.method === "GET")
-        return json({ ok: true, mode: "cloud-read-only" });
+        return json({
+          ok: true,
+          mode: "cloud-read-only",
+          storage: hasD1(env) ? "d1" : "kv-fallback",
+          sessionEncryption: hasServerKey(env),
+        });
       if (url.pathname === "/api/login" && request.method === "POST")
         return await login(request, env);
       if (url.pathname === "/api/logout" && request.method === "POST")
@@ -54,11 +61,11 @@ export default {
       if (url.pathname === "/api/devices" && request.method === "GET")
         return json({ devices: await accountDevices(session.token) });
       if (url.pathname === "/api/monitor" && request.method === "GET")
-        return await monitorStatus(request, env);
+        return await monitorStatus(request, env, session);
       if (url.pathname === "/api/monitor" && request.method === "POST")
         return await configureMonitor(request, env, session);
       if (url.pathname === "/api/monitor/history" && request.method === "GET")
-        return await monitorHistory(request, env, url);
+        return await monitorHistory(request, env, url, session);
       if (url.pathname === "/api/state" && request.method === "GET")
         return await state(url, session.token);
       if (url.pathname === "/api/tsl" && request.method === "GET")
@@ -92,26 +99,43 @@ async function login(request, env) {
     password.length > 256
   )
     return json({ error: "Введіть коректні email і пароль." }, 400);
-  const rateKey = await takeLoginAttempt(request, env);
+
+  const rate = await takeLoginAttempt(request, env);
   const token = await cloudLogin(email, password);
-  await env.SESSIONS.delete(rateKey);
-  const sessionId = randomId();
-  await env.SESSIONS.put(`session:${sessionId}`, JSON.stringify({ token }), {
-    expirationTtl: SESSION_TTL,
-  });
-  await refreshMonitorToken(request, env, token);
-  const response = json({ devices: await accountDevices(token) });
+  const devices = await accountDevices(token);
+  await clearLoginAttempt(rate, env);
+
+  const sessionId = randomId(),
+    accountId = await sha256hex(email.toLowerCase()),
+    storedToken = await protectSessionToken(token, env);
+  await env.SESSIONS.put(
+    "session:" + sessionId,
+    JSON.stringify({ token: storedToken, accountId }),
+    { expirationTtl: SESSION_TTL },
+  );
+
+  try {
+    await refreshMonitorToken(request, env, token, accountId);
+  } catch (error) {
+    console.error("OUKITEL monitor refresh error", error?.message || error);
+  }
+
+  const response = json({ devices });
   response.headers.set(
     "Set-Cookie",
-    `oukitel_session=${sessionId}; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=${SESSION_TTL}`,
+    "oukitel_session=" +
+      sessionId +
+      "; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=" +
+      SESSION_TTL,
   );
   response.headers.set("Cache-Control", "no-store");
   return response;
 }
 async function logout(request, env) {
-  const sessionId = cookie(request, "oukitel_session");
-  if (sessionId) await env.SESSIONS.delete(`session:${sessionId}`);
-  await deleteMonitor(request, env);
+  const sessionId = cookie(request, "oukitel_session"),
+    session = await sessionFor(request, env);
+  if (session) await deleteMonitor(request, env, session);
+  if (sessionId) await env.SESSIONS.delete("session:" + sessionId);
   const response = json({ ok: true });
   response.headers.set(
     "Set-Cookie",
@@ -124,8 +148,16 @@ async function logout(request, env) {
 async function sessionFor(request, env) {
   const id = cookie(request, "oukitel_session");
   if (!id || !/^[A-Za-z0-9_-]{40,}$/.test(id)) return null;
-  const data = await env.SESSIONS.get(`session:${id}`, "json");
-  return data?.token ? data : null;
+  const data = await env.SESSIONS.get("session:" + id, "json");
+  if (!data?.token) return null;
+  try {
+    return {
+      token: await unprotectSessionToken(data.token, env),
+      accountId: String(data.accountId || ""),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function monitorCookie(request) {
