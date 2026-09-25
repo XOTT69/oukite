@@ -165,9 +165,9 @@ function normalizeHistory(value) {
       soc: inRange(entry.soc, 0, 100, 0),
       input: inRange(entry.input, 0, 10000, 0),
       output: inRange(entry.output, 0, 10000, 0),
-      ac: Boolean(entry.ac),
-      usb: Boolean(entry.usb),
-      dc: Boolean(entry.dc),
+      ac: entry.ac == null ? null : Boolean(entry.ac),
+      usb: entry.usb == null ? null : Boolean(entry.usb),
+      dc: entry.dc == null ? null : Boolean(entry.dc),
     }))
     .filter((entry) => entry.at)
     .sort((a, b) => a.at - b.at)
@@ -288,7 +288,9 @@ function record() {
   history = [...history.filter((x) => lastStored - x.at < 864e5), p];
   if (old) {
     const changes = ["ac", "usb", "dc"]
-      .filter((k) => old[k] !== p[k])
+      .filter(
+        (k) => old[k] != null && p[k] != null && old[k] !== p[k],
+      )
       .map((k) => k.toUpperCase() + ": " + yes(p[k]));
     if (changes.length)
       activity = [
