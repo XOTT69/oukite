@@ -9,13 +9,19 @@ import {
   fmtMin,
   historyStats,
   mapAttrs,
+  chargeEstimate,
+  connectionState,
+  normalizeOnline,
+  reportedTime,
+  emptyState,
+  energyFromSamples,
 } from "../public/core.mjs";
 import worker, { md5hexCorrect } from "../worker.js";
 
 test("formatting and energy budget are bounded", () => {
   assert.equal(fmtMin(65), "1 год 5 хв");
   assert.equal(calcEnergy(110), 2048);
-  assert.equal(Math.round(calcBudget(350, 89)), 253);
+  assert.equal(Math.round(calcBudget(350, 89)), 250);
 });
 test("Quectel attributes map to P2001E Plus dashboard values", () => {
   const state = mapAttrs(
@@ -53,7 +59,7 @@ test("planner reserve and flow state remain understandable", () => {
     kind: "charging",
     net: 320,
     title: "Станція заряджається",
-    detail: "+320 W у батарею",
+    detail: "Вхід перевищує вихід на 320 Вт; втрати не враховані",
   });
   assert.equal(
     historyStats([
@@ -98,6 +104,99 @@ test("adaptive forecast learns refrigerator duty cycles instead of nameplate wat
   assert.equal(Math.round(forecast.measuredWatts), 50);
   assert.ok(forecast.minutes > calcBudgetWithReserve(100, 80, 8) * 1.9);
   assert.equal(forecast.confidence, "medium");
+  assert.ok(forecast.optimisticMinutes < forecast.minutes * 2);
+  assert.ok(forecast.conservativeMinutes <= forecast.minutes);
+});
+
+test("reserve is an absolute SOC floor; zero reserve remains zero", () => {
+  assert.equal(calcBudgetWithReserve(100, 5, 8), 0);
+  assert.equal(calcBudgetWithReserve(100, 8, 8), 0);
+  assert.equal(calcBudgetWithReserve(100, null, 8), null);
+  assert.equal(calcBudgetWithReserve(0, 80, 8), null);
+  assert.equal(
+    calcBudgetWithReserve(100, 50, 0),
+    ((2048 * 0.5 * 0.88) / 100) * 60,
+  );
+});
+test("charge estimate converts percent and accounts for simultaneous load", () => {
+  assert.ok(chargeEstimate(50, 1000, 0) < 80);
+  assert.ok(chargeEstimate(50, 1000, 200) > chargeEstimate(50, 1000, 0));
+  assert.equal(chargeEstimate(50, 100, 200), null);
+  assert.equal(chargeEstimate(null, 1000, 0), null);
+});
+test("availability separates unknown, confirmed offline, expired auth and errors", () => {
+  const now = Date.now(),
+    base = {
+      mode: "cloud",
+      device: {},
+      online: null,
+      phase: "ready",
+      updated: now,
+      now,
+    };
+  assert.equal(normalizeOnline("true"), true);
+  assert.equal(normalizeOnline("FALSE"), false);
+  assert.equal(normalizeOnline(undefined), null);
+  assert.equal(normalizeOnline(2), null);
+  assert.equal(connectionState(base), "unknown");
+  assert.equal(connectionState({ ...base, online: false }), "offline");
+  assert.equal(connectionState({ ...base, online: true }), "online");
+  assert.equal(
+    connectionState({ ...base, online: true, phase: "auth-required" }),
+    "auth-required",
+  );
+  assert.equal(
+    connectionState({ ...base, online: true, phase: "error" }),
+    "cloud-error",
+  );
+  assert.equal(
+    connectionState({ ...base, online: true, reportedAt: now - 3600000 }),
+    "stale",
+  );
+  assert.equal(
+    connectionState({ ...base, phase: "phone-offline" }),
+    "phone-offline",
+  );
+});
+test("missing attributes never synthesize measurements or port OFF states", () => {
+  const s = mapAttrs(
+    { data: { customizeTslInfo: [{ abId: 1, resourceValce: 73 }] } },
+    emptyState(),
+  );
+  assert.equal(s.soc, 73);
+  assert.equal(s.output, null);
+  assert.equal(s.ac, null);
+  assert.equal(reportedTime({ data: { customizeTslInfo: [] } }), null);
+  assert.equal(
+    mapAttrs(
+      { customizeTslInfo: [{ abId: 1, resourceValce: 200 }] },
+      emptyState(),
+    ).soc,
+    null,
+  );
+});
+test("gaps, duplicate timestamps and old load profiles do not inflate coverage", () => {
+  const now = Date.now(),
+    data = [
+      { at: now - 36e5, output: 100 },
+      { at: now - 36e5, output: 50 },
+      { at: now, output: 0 },
+    ];
+  assert.equal(energyFromSamples(data).coveredMs, 0);
+  assert.equal(adaptiveForecast(data, 80, 8, 100, now).source, "plan");
+  const recent = Array.from({ length: 25 }, (_, i) => ({
+    at: now - (24 - i) * 300000,
+    output: 50,
+  }));
+  const forecast = adaptiveForecast(
+    [{ at: now - 3 * 864e5, output: 2400 }, ...recent],
+    80,
+    8,
+    100,
+    now,
+  );
+  assert.ok(Math.abs(forecast.measuredWatts - 50) < 1e-6);
+  assert.equal(forecast.samples, 25);
 });
 
 test("worker health response has strict browser security headers", async () => {
