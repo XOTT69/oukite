@@ -15,7 +15,7 @@
     <meta name="apple-mobile-web-app-title" content="OUKITEL Home" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
-    <link rel="stylesheet" href="/styles.css?v=3.0.0" />
+    <link rel="stylesheet" href="/styles.css?v=3.0.1" />
     <title>OUKITEL Home</title>
   </head>
   <body>
@@ -106,7 +106,7 @@
           <div class="battery-ring" id="batteryRing">
             <div class="battery-inner">
               <strong id="soc">—</strong><span id="energy">Ще немає даних</span
-              ><small>заряд батареї</small>
+              ><small id="chargeCaption">заряд невідомий</small>
             </div>
           </div>
           <div class="hero-copy">
@@ -123,6 +123,7 @@
               ><button id="refreshBtn" class="inline-action">Оновити</button>
             </div>
           </div>
+          <p id="cachedCharge" class="cached-charge hidden" role="status"></p>
           <button id="connectBtn" class="primary-button">
             Підключити свою станцію
           </button>
@@ -711,6 +712,6 @@
     </dialog>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <noscript>Для роботи застосунку потрібно ввімкнути JavaScript.</noscript>
-    <script type="module" src="/app.js?v=3.0.0"></script>
+    <script type="module" src="/app.js?v=3.0.1"></script>
   </body>
 </html>

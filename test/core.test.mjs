@@ -5,6 +5,7 @@ import {
   calcBudget,
   calcBudgetWithReserve,
   calcEnergy,
+  currentCharge,
   flowSummary,
   fmtMin,
   historyStats,
@@ -22,6 +23,31 @@ test("formatting and energy budget are bounded", () => {
   assert.equal(fmtMin(65), "1 год 5 хв");
   assert.equal(calcEnergy(110), 2048);
   assert.equal(Math.round(calcBudget(350, 89)), 250);
+});
+test("unconfirmed cached charge is not current SOC or usable energy", () => {
+  for (const available of [false, null, undefined]) {
+    const soc = currentCharge(89, { mode: "cloud", available });
+    assert.equal(soc, null);
+    assert.equal(calcBudgetWithReserve(100, soc, 8), null);
+  }
+  assert.equal(currentCharge(100, { mode: "cloud", available: true }), 100);
+  assert.equal(currentCharge(0, { mode: "cloud", available: true }), 0);
+  assert.equal(currentCharge(null, { mode: "cloud", available: true }), null);
+  assert.equal(currentCharge(101, { mode: "cloud", available: true }), null);
+  assert.equal(currentCharge(89, { mode: "demo", available: false }), 89);
+});
+test("a power timestamp cannot masquerade as a battery timestamp", () => {
+  const now = Date.now();
+  const payload = {
+    data: {
+      customizeTslInfo: [
+        { abId: 1, resourceValce: 89 },
+        { abId: 5, resourceValce: 50, updateTime: now },
+      ],
+    },
+  };
+  assert.equal(reportedTime(payload, now), now);
+  assert.equal(reportedTime(payload, now, [1]), null);
 });
 test("Quectel attributes map to P2001E Plus dashboard values", () => {
   const state = mapAttrs(

@@ -2,6 +2,7 @@ import {
   adaptiveForecast,
   calcBudgetWithReserve,
   calcEnergy,
+  currentCharge,
   chargeEstimate,
   connectionState,
   emptyState,
@@ -11,11 +12,12 @@ import {
   freshLabel,
   historyStats,
   mapAttrs,
+  reportedTime,
   usableEnergy,
-} from "/core.mjs?v=3.0.0";
+} from "/core.mjs?v=3.0.1";
 const $ = (id) => document.getElementById(id),
   KEY = "oukitel_ui",
-  VERSION = "3.0.0";
+  VERSION = "3.0.1";
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const safe = (v) =>
   String(v ?? "").replace(
@@ -317,6 +319,15 @@ const canMeasure = () =>
   (chosen()?.online === true ||
     (state.reportedAt && Date.now() - state.reportedAt <= 12 * 60000)) &&
   (!state.reportedAt || Date.now() - state.reportedAt <= 12 * 60000);
+const liveCharge = () =>
+  currentCharge(state.soc, {
+    mode: settings.mode,
+    available:
+      canMeasure() &&
+      (!state.chargeReportedAt ||
+        Date.now() - state.chargeReportedAt <= 12 * 60000) &&
+      (chosen()?.online === true || !!state.chargeReportedAt),
+  });
 async function api(path, options = {}) {
   const ctl = new AbortController(),
     timeout = setTimeout(() => ctl.abort(), 25000);
@@ -391,7 +402,7 @@ const STATUS = {
   offline: [
     "Станція офлайн",
     "Хмара повідомляє: офлайн",
-    "Останні показники можуть бути збереженими. Перевірте станцію у Wonderfree.",
+    "Свіжих вимірювань немає. Останній хмарний запис наведено окремо.",
   ],
   online: [
     "Станція онлайн",
@@ -446,7 +457,7 @@ function renderConnection() {
         : "Час вимірювання хмара не передає."
       : copy;
   $("updatedShort").textContent = cloud()
-    ? "Отримано: " + freshLabel(state.updated)
+    ? "Відповідь хмари: " + freshLabel(state.updated) + " · не час вимірювання"
     : "Приклад · не ваша станція";
   $("connectBtn").classList.toggle(
     "hidden",
@@ -464,7 +475,12 @@ function renderConnection() {
         : "Фоновий збір не активний";
 }
 const forecastNow = () =>
-  adaptiveForecast(canMeasure() ? history : [], state.soc, settings.reserve, 0);
+  adaptiveForecast(
+    canMeasure() ? history : [],
+    liveCharge(),
+    settings.reserve,
+    0,
+  );
 const plannedWatts = () =>
   settings.loads
     .filter((x) => x.active)
@@ -476,20 +492,39 @@ function render() {
         ? flowSummary(state.input, state.output)
         : null,
     planned = plannedWatts(),
+    soc = liveCharge(),
     forecast = forecastNow(),
-    planMinutes = calcBudgetWithReserve(planned, state.soc, settings.reserve);
+    planMinutes = calcBudgetWithReserve(planned, soc, settings.reserve);
   const minutes =
     forecast.source === "measured"
       ? forecast.minutes
       : canMeasure()
-        ? calcBudgetWithReserve(state.output, state.soc, settings.reserve)
+        ? calcBudgetWithReserve(state.output, soc, settings.reserve)
         : null;
-  $("soc").textContent = state.soc == null ? "—" : Math.round(state.soc) + "%";
-  $("energy").textContent =
-    state.soc == null ? "Ще немає даних" : wh(calcEnergy(state.soc));
-  const pct = state.soc == null ? 0 : Math.max(0, Math.min(100, state.soc));
+  $("soc").textContent = soc == null ? "—" : Math.round(soc) + "%";
+  $("energy").textContent = soc == null ? "— кВт·год" : wh(calcEnergy(soc));
+  $("chargeCaption").textContent =
+    soc == null
+      ? "заряд невідомий"
+      : cloud()
+        ? "заряд із хмари"
+        : "демо · не ваша станція";
+  const pct = soc == null ? 0 : Math.max(0, Math.min(100, soc));
   $("batteryRing").style.background =
     "conic-gradient(var(--cyan) 0 " + pct + "%,var(--line) " + pct + "% 100%)";
+  $("cachedCharge").classList.toggle(
+    "hidden",
+    !cloud() || soc != null || state.soc == null,
+  );
+  $("cachedCharge").textContent =
+    "Останній запис заряду в хмарі: " +
+    Math.round(state.soc) +
+    "%. " +
+    (state.chargeReportedAt
+      ? "Час вимірювання заряду: " +
+        new Date(state.chargeReportedAt).toLocaleString("uk-UA") +
+        ". Це не поточний заряд."
+      : "Час вимірювання невідомий. Це не поточний заряд.");
   $("readyHours").textContent = fmtMin(minutes);
   $("readyCopy").textContent = cloud()
     ? minutes != null
@@ -536,15 +571,19 @@ function render() {
   $("chargeLimit").textContent =
     state.chargeLimit == null ? "—" : state.chargeLimit + "%";
   const charge =
-    state.chargingRemain ??
-    chargeEstimate(state.soc, state.input, state.output);
+    soc == null
+      ? null
+      : (state.chargingRemain ??
+        chargeEstimate(soc, state.input, state.output));
   $("chargeEta").textContent = fmtMin(charge);
   $("chargeEtaHint").textContent =
-    state.chargingRemain != null
-      ? "Оцінка станції"
-      : charge != null
-        ? "Приблизно · з урахуванням виходу"
-        : "Немає заряджання або даних";
+    soc == null
+      ? "Немає свіжих даних"
+      : state.chargingRemain != null
+        ? "Оцінка станції"
+        : charge != null
+          ? "Приблизно · з урахуванням виходу"
+          : "Немає заряджання або даних";
   $("deviceModel").textContent = chosen()?.productName || "OUKITEL P2001E PLUS";
   $("productKey").textContent = chosen()?.productKey || "—";
   for (const k of ["ac", "usb", "dc"]) {
@@ -555,7 +594,10 @@ function render() {
     $(k + "Switch").classList.toggle("on", state[k] === true);
   }
   $("controlDataState").textContent = cloud()
-    ? "Отримано: " + freshLabel(state.updated) + " · " + STATUS[status()][0]
+    ? "Відповідь хмари: " +
+      freshLabel(state.updated) +
+      " · " +
+      STATUS[status()][0]
     : "Приклад · не ваша станція";
   for (const [k, suffix] of [
     ["frequency", " Гц"],
@@ -569,9 +611,13 @@ function render() {
         : (["inverter", "bms"].includes(k) ? "v" : "") + state[k] + suffix;
   $("reserveInput").value = settings.reserve;
   $("reserveLabel").textContent = settings.reserve + "%";
-  $("usableEnergy").textContent = wh(usableEnergy(state.soc, settings.reserve));
+  $("usableEnergy").textContent = wh(usableEnergy(soc, settings.reserve));
   $("reserveCopy").textContent =
-    "Заряд " + (state.soc ?? "—") + "% · резерв " + settings.reserve + "%";
+    "Заряд " +
+    (soc == null ? "невідомий" : soc + "%") +
+    " · резерв " +
+    settings.reserve +
+    "%";
   $("plannedWatts").textContent = w(planned);
   $("plannedWattsHome").textContent = planned
     ? "Ваш сценарій: " + w(planned)
@@ -583,15 +629,13 @@ function render() {
     : fmtMin(planMinutes);
   $("forecastLabel").textContent = "Якщо працює ваш план";
   $("forecastRange").textContent =
-    state.soc == null
-      ? "Спершу підключіть станцію для реального заряду."
-      : cloud() && !canMeasure()
-        ? "За останнім зарядом; актуальність не підтверджена."
-        : "План незалежний від фактичного навантаження.";
+    soc == null
+      ? "Свіжий заряд невідомий; за старим записом тривалість не розраховуємо."
+      : "План незалежний від фактичного навантаження.";
   $("planCompare").textContent = planned
     ? "За сценарієм " +
       fmtMin(planMinutes) +
-      " · зараз на виході " +
+      (canMeasure() ? " · зараз на виході " : " · останній запис виходу ") +
       w(state.output) +
       "."
     : "Додайте прилади, виміряйте середнє й збережіть власний сценарій.";
@@ -1016,6 +1060,7 @@ async function lowAlert() {
   if (
     !settings.alerts.enabled ||
     !canMeasure() ||
+    liveCharge() == null ||
     state.soc == null ||
     state.soc > settings.alerts.threshold ||
     Date.now() - settings.alerts.lastAlertAt < 6 * 36e5
@@ -1053,6 +1098,7 @@ async function refresh() {
         ...fresh,
         updated: j.connection?.receivedAt || Date.now(),
         reportedAt: j.connection?.reportedAt || null,
+        chargeReportedAt: reportedTime(j, Date.now(), [1]),
       };
       const entry = devices.find(
         (x) => x.productKey === d.productKey && x.deviceKey === d.deviceKey,

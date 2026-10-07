@@ -84,7 +84,8 @@ test("unknown availability still fetches telemetry and never says offline", asyn
   page,
 }) => {
   const calls = await setup(page, { online: null });
-  await expect(page.locator("#soc")).toHaveText("73%");
+  await expect(page.locator("#soc")).toHaveText("—");
+  await expect(page.locator("#cachedCharge")).toContainText("73%");
   await expect(page.locator("#statusText")).toHaveText("Статус невідомий");
   expect(calls()).toBe(1);
   await expect(page.locator("#readyHours")).toHaveText("—");
@@ -101,14 +102,29 @@ test("confirmed online and offline are distinct", async ({ page }) => {
   await page.route("**/api/state?**", (route) =>
     route.fulfill({
       json: {
-        data: { customizeTslInfo: [{ abId: 1, resourceValce: 73 }] },
+        data: { customizeTslInfo: [{ abId: 1, resourceValce: 89 }] },
         connection: { online: false, receivedAt: Date.now(), reportedAt: null },
       },
     }),
   );
   await page.locator("#refreshBtn").click();
   await expect(page.locator("#statusText")).toHaveText("Станція офлайн");
+  await expect(page.locator("#soc")).toHaveText("—");
+  await expect(page.locator("#energy")).toHaveText("— кВт·год");
+  await expect(page.locator("#cachedCharge")).toContainText(
+    "Останній запис заряду в хмарі: 89%",
+  );
+  await expect(page.locator("#cachedCharge")).toContainText(
+    "Це не поточний заряд",
+  );
+  await expect(page.locator("#updatedShort")).toContainText(
+    "не час вимірювання",
+  );
   await expect(page.locator("#readyHours")).toHaveText("—");
+  await page.screenshot({
+    path: "artifacts/charge-offline-" + test.info().project.name + ".png",
+    fullPage: false,
+  });
 });
 test("expired auth prompts login without inventing battery data", async ({
   page,
@@ -118,15 +134,76 @@ test("expired auth prompts login without inventing battery data", async ({
   await expect(page.locator("#soc")).toHaveText("—");
   await expect(page.locator("#connectBtn")).toBeVisible();
 });
+test("offline cached 89 becomes 100 only after a new online cloud reading", async ({
+  page,
+}) => {
+  await setup(page, {
+    online: false,
+    attributes: [{ abId: 1, resourceValce: 89 }],
+  });
+  await expect(page.locator("#statusText")).toHaveText("Станція офлайн");
+  await expect(page.locator("#soc")).toHaveText("—");
+  await expect(page.locator("#cachedCharge")).toContainText("89%");
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: "План", exact: true })
+    .click();
+  await page.locator('[data-preset="3"]').click();
+  await expect(page.locator("#budgetTime")).toHaveText("—");
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: "Зараз", exact: true })
+    .click();
+  await page.route("**/api/state?**", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          customizeTslInfo: [
+            { abId: 1, resourceValce: 100, updateTime: Date.now() },
+            { abId: 4, resourceValce: 0 },
+            { abId: 5, resourceValce: 50 },
+          ],
+        },
+        connection: {
+          online: true,
+          receivedAt: Date.now(),
+          reportedAt: Date.now(),
+        },
+      },
+    }),
+  );
+  await page.locator("#refreshBtn").click();
+  await expect(page.locator("#soc")).toHaveText("100%");
+  await expect(page.locator("#cachedCharge")).toBeHidden();
+  await expect(page.locator("#readyHours")).not.toHaveText("—");
+});
+test("old battery timestamp remains unconfirmed even when power has a fresh timestamp", async ({
+  page,
+}) => {
+  await setup(page, {
+    attributes: [
+      { abId: 1, resourceValce: 89, updateTime: Date.now() - 86400000 },
+      { abId: 4, resourceValce: 0, updateTime: Date.now() },
+      { abId: 5, resourceValce: 50, updateTime: Date.now() },
+    ],
+  });
+  await expect(page.locator("#soc")).toHaveText("—");
+  await expect(page.locator("#cachedCharge")).toContainText(
+    "Час вимірювання заряду:",
+  );
+  await expect(page.locator("#readyHours")).toHaveText("—");
+});
 test("cloud failure preserves only a real scoped snapshot", async ({
   page,
 }) => {
   await setup(page, { stateError: 502, cached: true });
   await expect(page.locator("#statusText")).toHaveText("Помилка хмари");
-  await expect(page.locator("#soc")).toHaveText("61%");
+  await expect(page.locator("#soc")).toHaveText("—");
+  await expect(page.locator("#cachedCharge")).toContainText("61%");
   await expect(page.locator("#readyHours")).toHaveText("—");
   await page.reload();
-  await expect(page.locator("#soc")).toHaveText("61%");
+  await expect(page.locator("#soc")).toHaveText("—");
+  await expect(page.locator("#cachedCharge")).toContainText("61%");
 });
 test("partial telemetry leaves unknown outputs and ports blank", async ({
   page,

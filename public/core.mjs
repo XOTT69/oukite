@@ -15,6 +15,13 @@ export function fmtMin(value) {
 export function calcEnergy(soc) {
   return (CAPACITY_WH * Math.max(0, Math.min(100, Number(soc) || 0))) / 100;
 }
+// A cloud response or saved snapshot is not proof of a current battery level.
+export function currentCharge(soc, { mode, available }) {
+  if (soc == null || soc === "" || typeof soc === "boolean") return null;
+  const value = Number(soc);
+  if (!Number.isFinite(value) || value < 0 || value > 100) return null;
+  return mode === "demo" || available === true ? value : null;
+}
 export function calcBudget(watts, soc) {
   return calcBudgetWithReserve(watts, soc, RESERVE * 100);
 }
@@ -71,7 +78,7 @@ export function normalizeOnline(value) {
       ? false
       : null;
 }
-export function reportedTime(payload, now = Date.now()) {
+export function reportedTime(payload, now = Date.now(), ids = [1, 4, 5]) {
   const attrs =
     payload?.data?.customizeTslInfo || payload?.customizeTslInfo || [];
   const data = payload?.data || payload || {};
@@ -87,7 +94,7 @@ export function reportedTime(payload, now = Date.now()) {
   };
   // Never substitute HTTP receipt time for a device measurement timestamp.
   const times = attrs
-    .filter((x) => [1, 4, 5].includes(Number(x.abId)))
+    .filter((x) => ids.includes(Number(x.abId)))
     .map((x) => parse(x.updateTime ?? x.timestamp ?? x.resourceUpdateTime))
     .filter((x) => x != null);
   return times.length

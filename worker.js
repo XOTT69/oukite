@@ -83,7 +83,7 @@ export default {
         return json({
           ok: true,
           mode: "cloud-read-only",
-          version: "3.0.0",
+          version: "3.0.1",
           storage: hasD1(env) ? "d1" : "kv-fallback",
           sessionEncryption: !!env.MONITOR_KEY,
         });
