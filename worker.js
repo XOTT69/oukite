@@ -83,7 +83,7 @@ export default {
         return json({
           ok: true,
           mode: "cloud-read-only",
-          version: "3.1.0",
+          version: "3.1.1",
           storage: hasD1(env) ? "d1" : "kv-fallback",
           sessionEncryption: !!env.MONITOR_KEY,
         });
@@ -778,7 +778,7 @@ async function parseCloud(response, fallback, stage = "login") {
     vendorCode: Number.isSafeInteger(vendorCode) ? vendorCode : null,
   };
   const authError =
-    response.status === 401 || [401, 4001, 1003].includes(vendorCode);
+    response.status === 401 || [401, 4001, 1003, 5032].includes(vendorCode);
   if (authError)
     throw new CloudError(
       "Сесія Quectel завершилась. Увійдіть знову.",

@@ -232,11 +232,12 @@ test("pause and logout retain history but discard the monitor token", async () =
   assert.equal(logout.status, 200);
   assert.ok(env.SESSIONS.values.has(key));
 });
-test("vendor string auth codes produce auth-required, not offline", async () => {
+test("vendor auth codes including expired token 5032 require login, not offline", async () => {
   const original = globalThis.fetch,
     originalError = console.error;
   const { env, headers } = await monitorFixture();
-  globalThis.fetch = async () => json({ code: "1003" });
+  let vendorCode = "1003";
+  globalThis.fetch = async () => json({ code: vendorCode });
   console.error = () => {};
   try {
     const response = await worker.fetch(
@@ -245,6 +246,10 @@ test("vendor string auth codes produce auth-required, not offline", async () => 
     );
     assert.equal(response.status, 401);
     assert.equal((await response.json()).code, "auth-required");
+    vendorCode = "5032";
+    const expired = await worker.fetch(request("/api/devices", { headers }), env);
+    assert.equal(expired.status, 401);
+    assert.equal((await expired.json()).code, "auth-required");
   } finally {
     globalThis.fetch = original;
     console.error = originalError;

@@ -15,10 +15,10 @@ import {
   mapAttrs,
   reportedTime,
   usableEnergy,
-} from "/core.mjs?v=3.1.0";
+} from "/core.mjs?v=3.1.1";
 const $ = (id) => document.getElementById(id),
   KEY = "oukitel_ui",
-  VERSION = "3.1.0";
+  VERSION = "3.1.1";
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const safe = (v) =>
   String(v ?? "").replace(
