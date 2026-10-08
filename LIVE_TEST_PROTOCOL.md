@@ -1,21 +1,30 @@
-# Live verification protocol
+# Перевірка реальної станції
 
-Run this checklist only when the P2001E Plus is powered on, connected to Wi‑Fi,
-and marked online in Wonderfree. It deliberately performs **no** AC/USB/DC
-write command from OUKITEL Home.
+Цей протокол ще потребує виконання на авторизованому акаунті користувача.
+Автоматичні тести використовують синтетичну телеметрію й не є live-підтвердженням.
+PWA не надсилає жодної команди AC/USB/DC.
 
-1. Open Wonderfree and confirm that the station is online.
-2. Open OUKITEL Home, use **Оновити**, and verify the green
-   **Підключено · онлайн** status.
-3. Compare SOC, input, output and temperature with Wonderfree. Record any
-   difference above 1% SOC or 10 W.
-4. In Wonderfree, change USB only. Return to OUKITEL Home and wait for the
-   next sync. Confirm the USB state and activity history update.
-5. Turn the station offline in Wonderfree or disconnect its Wi‑Fi. Confirm
-   **Станція офлайн**, retained last values, and an availability event.
-6. Restore Wi‑Fi, manually refresh OUKITEL Home, and confirm the green
-   online state returns.
+1. Звірити «онлайн» у Wonderfree. У PWA увійти й натиснути «Оновити».
+2. Якщо статус невідомий, у DevTools прочитати лише поля online/isOnline/onlineStatus
+   та timestamps відповіді. Не експортувати cookies, tokens, authKey чи повну
+   відповідь акаунта. Невідомий статус не заміняти вигаданим «онлайн».
+3. Звірити SOC, вхід, вихід, температуру та порти в обох застосунках.
+   Різниця може залежати від часу вимірювання; повторити на стабільному навантаженні.
+4. За окремим рішенням користувача можна змінити USB у Wonderfree,
+   якщо на ньому немає важливого приладу. Не вимикати AC холодильника/котла для тесту.
+5. При природній втраті Wi-Fi станції перевірити offline або stale/unknown,
+   залежно від того, що реально передає хмара. HTTP 200 не вважати онлайн.
+6. Відновити зв’язок та звірити оновлення. При завершенні сесії має бути
+   «Потрібен вхід», а не «Станція офлайн».
+7. Увімкнути фоновий збір і закрити PWA на 15+ хв. Після відкриття перевірити
+   нові записи, час джерела та відсутність навчання на застарілій телеметрії.
+8. Для холодильника провести окрему 6–24-годинну сесію. Порівняти з
+   зовнішнім лічильником, якщо він є. Не називати точність підтвердженою без порівняння.
+9. На фізичному iPhone встановити PWA з Safari. Після першої синхронізації
+   вимкнути інтернет **телефона**, закрити/відкрити PWA та перевірити кеш і плани.
+   Має бути статус телефону без інтернету, не вигаданий офлайн станції.
+10. Прийняти оновлення PWA. Перевірити версію 3.0.1, збереження плану, резерв 0%,
+    клавіатуру, великий текст і відсутність горизонтального прокручування.
 
-Pass criteria: all read-only fields agree with Wonderfree within the limits
-above, output-state transitions appear in the history, and no control command
-is issued by this PWA.
+Фіксувати дату, версію застосунку, стан Wonderfree, результат і розбіжність.
+Не додавати приватну телеметрію чи credentials до GitHub.

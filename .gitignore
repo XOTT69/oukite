@@ -1,6 +1,10 @@
-.dev.vars
-.wrangler/
 node_modules/
+.wrangler/
+test-results/
+playwright-report/
+artifacts/
+.dev.vars
+.env
+.env.*
 .DS_Store
 coverage/
-

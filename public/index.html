@@ -15,7 +15,7 @@
     <meta name="apple-mobile-web-app-title" content="OUKITEL Home" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=3.2.0" />
     <title>OUKITEL Home</title>
   </head>
   <body>
@@ -59,8 +59,35 @@
         <path d="M8 20H5v-3m11 3h3v-3" />
       </symbol>
       <symbol id="i-dc" viewBox="0 0 24 24">
-        <circle cx="12" cy="12" r="7" />
-        <path d="M12 7v5l3 2" />
+        <path d="M3 8h18M3 16h4m3 0h4m3 0h4" />
+      </symbol>
+      <symbol id="i-router" viewBox="0 0 24 24">
+        <rect x="3" y="13" width="18" height="7" rx="2" />
+        <path
+          d="M6 13V8m12 5V8M8 5a7 7 0 0 1 8 0M10 8a4 4 0 0 1 4 0M7 17h1m3 0h1"
+        />
+      </symbol>
+      <symbol id="i-laptop" viewBox="0 0 24 24">
+        <rect x="4" y="3" width="16" height="13" rx="2" />
+        <path d="m4 16-2 4h20l-2-4M10 20h4" />
+      </symbol>
+      <symbol id="i-light" viewBox="0 0 24 24">
+        <path d="M8 15a7 7 0 1 1 8 0l-1 3H9ZM9 21h6M12 2V1" />
+      </symbol>
+      <symbol id="i-fridge" viewBox="0 0 24 24">
+        <rect x="6" y="2" width="12" height="20" rx="2" />
+        <path d="M6 9h12M9 5v1m0 7v3" />
+      </symbol>
+      <symbol id="i-tv" viewBox="0 0 24 24">
+        <rect x="2" y="4" width="20" height="14" rx="2" />
+        <path d="M8 22h8m-4-4v4" />
+      </symbol>
+      <symbol id="i-heat" viewBox="0 0 24 24">
+        <rect x="4" y="3" width="16" height="18" rx="3" />
+        <path d="M8 7h8M8 11h8M9 17h1m4 0h1" />
+      </symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24">
+        <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" />
       </symbol>
     </svg>
     <main class="app-shell">
@@ -78,8 +105,8 @@
         <section class="hero-card">
           <div class="battery-ring" id="batteryRing">
             <div class="battery-inner">
-              <strong id="soc">89%</strong><span id="energy">1.82 kWh</span
-              ><small>залишилось</small>
+              <strong id="soc">—</strong><span id="energy">Ще немає даних</span
+              ><small id="chargeCaption">заряд невідомий</small>
             </div>
           </div>
           <div class="hero-copy">
@@ -87,7 +114,7 @@
               <i class="dot" id="statusDot"></i
               ><span id="statusText">Демо</span>
             </div>
-            <h2 id="powerHeadline">Станція готова</h2>
+            <h2 id="powerHeadline">Підготовка застосунку</h2>
             <p id="powerSubline">
               Підключіть Wonderfree, щоб побачити реальні дані.
             </p>
@@ -96,14 +123,19 @@
               ><button id="refreshBtn" class="inline-action">Оновити</button>
             </div>
           </div>
+          <p id="cachedCharge" class="cached-charge hidden" role="status"></p>
+          <button id="connectBtn" class="primary-button">
+            Підключити свою станцію
+          </button>
         </section>
         <section class="readiness-card card">
           <div class="readiness-icon">
             <svg class="icon"><use href="#i-bolt" /></svg>
           </div>
           <div>
-            <p class="eyebrow">ГОТОВНІСТЬ ДО БЛЕКАУТУ</p>
+            <p class="eyebrow">АВТОНОМНІСТЬ ЗАРАЗ</p>
             <strong id="readyHours">—</strong>
+            <p id="homeForecastEta" class="forecast-eta"></p>
             <p id="readyCopy">Додайте план навантаження, щоб оцінити резерв.</p>
           </div>
           <button
@@ -114,6 +146,10 @@
             <svg class="icon"><use href="#i-arrow-right" /></svg>
           </button>
         </section>
+        <p class="monitor-line" id="monitorHome"></p>
+        <button class="text-button forecast-explainer" data-info="forecast">
+          Як пораховано автономність?
+        </button>
         <section class="card power-card">
           <div class="section-top">
             <div>
@@ -125,18 +161,18 @@
           <div class="flow-grid">
             <article class="flow-node input">
               <svg class="icon"><use href="#i-input" /></svg><small>Вхід</small
-              ><strong id="inputW">0 W</strong
-              ><em id="inputDetail">AC 0 · Solar 0</em>
+              ><strong id="inputW">—</strong
+              ><em id="inputDetail">Очікуємо показники</em>
             </article>
             <div class="flow-arrow" id="flowArrow">→</div>
             <article class="flow-node output">
               <svg class="icon"><use href="#i-output" /></svg
-              ><small>Вихід</small><strong id="outputW">0 W</strong
+              ><small>Вихід</small><strong id="outputW">—</strong
               ><em id="outputDetail">немає навантаження</em>
             </article>
           </div>
           <div class="net-line">
-            <span id="netLabel">Баланс</span><strong id="netPower">0 W</strong
+            <span id="netLabel">Баланс</span><strong id="netPower">—</strong
             ><small id="netHint"
               >станція не заряджається і не розряджається</small
             >
@@ -152,12 +188,12 @@
             ><small>всередині станції</small>
           </article>
           <article class="metric">
-            <span>До 100%</span><strong id="chargeEta">—</strong
+            <span>Час заряджання</span><strong id="chargeEta">—</strong
             ><small id="chargeEtaHint">потрібен вхід</small>
           </article>
           <article class="metric">
             <span>Ліміт AC</span><strong id="chargeLimit">—</strong
-            ><small>захист ресурсу</small>
+            ><small>поточне налаштування станції</small>
           </article>
         </section>
         <section class="card comparison-card">
@@ -207,18 +243,25 @@
           id="profileList"
           aria-label="Швидкі сценарії"
         ></section>
+        <button id="saveProfileBtn" class="text-button">
+          Зберегти власний сценарій
+        </button>
         <section class="card planner-summary">
           <div>
             <span>Доступна енергія</span><strong id="usableEnergy">—</strong
             ><small id="reserveCopy">з резервом 8%</small>
           </div>
           <div>
-            <span>Навантаження для прогнозу</span><strong id="plannedWatts">0 W</strong
+            <span>Навантаження для прогнозу</span
+            ><strong id="plannedWatts">0 Вт</strong
             ><small id="loadsCount">0 приладів</small>
           </div>
           <div class="accent">
-            <span id="forecastLabel">За планом</span><strong id="budgetTime">—</strong
-            ><small id="forecastRange">Додайте прилади або увімкніть моніторинг.</small>
+            <span id="forecastLabel">За планом</span
+            ><strong id="budgetTime">—</strong
+            ><small id="forecastRange"
+              >Додайте прилади або увімкніть моніторинг.</small
+            >
           </div>
         </section>
         <section class="card adaptive-card">
@@ -233,6 +276,11 @@
             Увімкніть фоновий моніторинг у налаштуваннях: сервер збиратиме
             фактичне навантаження кожні 5 хвилин, навіть коли PWA закритий.
           </p>
+          <strong id="adaptiveTime" class="adaptive-time">—</strong>
+          <p id="adaptiveRange"></p>
+          <button class="text-button" data-info="forecast">
+            Формула та обмеження
+          </button>
           <div id="calibrationBox" class="calibration-box"></div>
         </section>
         <section class="card reserve-card">
@@ -276,7 +324,7 @@
                 maxlength="30"
                 placeholder="Наприклад, роутер" /></label
             ><label
-              >Потужність, W<input
+              >Потужність, Вт<input
                 id="customLoadW"
                 inputmode="numeric"
                 type="number"
@@ -294,7 +342,7 @@
       <section id="historyScreen" class="screen">
         <section class="screen-intro">
           <p class="eyebrow">ІСТОРІЯ</p>
-          <h2>Енергія за добу</h2>
+          <h2>Ваша енергія</h2>
           <p id="historyLead">Історія зберігається тільки на цьому iPhone.</p>
         </section>
         <div
@@ -306,8 +354,32 @@
           <button data-range="1">1 год</button
           ><button data-range="6">6 год</button
           ><button data-range="24" class="active">24 год</button
-          ><button data-range="168">7 днів</button>
+          ><button data-range="168">7 днів</button
+          ><button data-range="720">30 днів</button>
         </div>
+        <section class="card energy-summary">
+          <span>Орієнтовно спожито за період</span>
+          <strong id="historyEnergy">—</strong>
+          <p id="historyCoverage"></p>
+          <button id="exportCsvBtn" class="text-button">
+            Експорт історії CSV
+          </button>
+        </section>
+        <section class="card activity-overview">
+          <div class="section-top">
+            <div>
+              <h2>Активність станції</h2>
+              <p>Оцінка між отриманими вимірюваннями · поріг 10 Вт</p>
+            </div>
+          </div>
+          <div class="activity-metrics">
+            <div><span>Спостерігали станцію</span><strong id="observedHours">—</strong></div>
+            <div><span>Живила прилади</span><strong id="supplyingHours">—</strong></div>
+            <div><span>Заряджалася</span><strong id="chargingHours">—</strong></div>
+            <div><span>Поточна серія вимірювань</span><strong id="currentSessionHours">—</strong></div>
+          </div>
+          <p class="chart-summary" id="activityCoverageNote"></p>
+        </section>
         <section class="metric-grid">
           <article class="metric">
             <span>Пік входу</span><strong id="peakInput">—</strong
@@ -323,7 +395,7 @@
           </article>
           <article class="metric">
             <span>Записів</span><strong id="historyCount">0</strong
-            ><small>на цьому iPhone</small>
+            ><small>за обраний період</small>
           </article>
         </section>
         <section class="card chart-card">
@@ -342,6 +414,18 @@
             height="280"
             aria-label="Графік заряду та потужності"
           ></canvas>
+          <p id="graphSummary" class="chart-summary"></p>
+          <p class="chart-summary">
+            Ліворуч — заряд, %; праворуч — потужність, Вт. Розриви — відсутні
+            вимірювання.
+          </p>
+        </section>
+        <section class="card">
+          <h2>Добові підсумки</h2>
+          <p class="chart-summary">
+            За місцевим часом. Неповна доба не дорівнює нульовому споживанню.
+          </p>
+          <div id="dailyReport" class="daily-report"></div>
         </section>
         <section class="card activity-card">
           <div class="section-top">
@@ -356,7 +440,7 @@
       <section id="outputsScreen" class="screen">
         <section class="screen-intro">
           <p class="eyebrow">ВИХОДИ СТАНЦІЇ</p>
-          <h2>Статус і керування</h2>
+          <h2>Виходи та діагностика</h2>
           <p>
             OUKITEL Home показує стан портів. Для перемикання AC, USB і DC
             використовуйте Wonderfree.
@@ -381,18 +465,18 @@
           </div>
           <div class="control-row">
             <svg class="icon"><use href="#i-ac" /></svg>
-            <div><b>AC 230 V</b><small id="acControlCopy">—</small></div>
-            <i class="switch" id="acSwitch"></i>
+            <div><b>AC · розетки</b><small id="acControlCopy">—</small></div>
+            <span class="port-badge" id="acSwitch">Невідомо</span>
           </div>
           <div class="control-row">
             <svg class="icon"><use href="#i-usb" /></svg>
             <div><b>USB</b><small id="usbControlCopy">—</small></div>
-            <i class="switch" id="usbSwitch"></i>
+            <span class="port-badge" id="usbSwitch">Невідомо</span>
           </div>
           <div class="control-row">
             <svg class="icon"><use href="#i-dc" /></svg>
             <div><b>DC</b><small id="dcControlCopy">—</small></div>
-            <i class="switch" id="dcSwitch"></i>
+            <span class="port-badge" id="dcSwitch">Невідомо</span>
           </div>
         </section>
         <section class="card instruction-card">
@@ -420,13 +504,20 @@
             <div><span>Напруга</span><b id="voltage">—</b></div>
             <div><span>Inverter</span><b id="inverter">—</b></div>
             <div><span>BMS</span><b id="bms">—</b></div>
-            <div><span>Product key</span><b id="productKey">—</b></div>
           </div>
+          <details class="advanced">
+            <summary>Технічна інформація</summary>
+            <p>Модель у хмарі: <b id="productKey">—</b></p>
+            <p>
+              Ідентифікатор не потрібно вводити вручну. Секретні токени браузер
+              не отримує.
+            </p>
+          </details>
         </section>
       </section>
     </main>
     <nav class="bottom-nav" aria-label="Навігація">
-      <button class="nav-item active" data-tab="home">
+      <button class="nav-item active" data-tab="home" aria-current="page">
         <svg class="icon"><use href="#i-home" /></svg>Зараз</button
       ><button class="nav-item" data-tab="plan">
         <svg class="icon"><use href="#i-plan" /></svg>План</button
@@ -437,13 +528,18 @@
       </button>
     </nav>
     <dialog id="settingsDialog">
-      <form method="dialog" class="dialog-panel settings-panel">
+      <form id="settingsForm" class="dialog-panel settings-panel">
         <div class="dialog-head">
           <div>
             <p class="eyebrow">НАЛАШТУВАННЯ</p>
             <h2>Моя станція</h2>
           </div>
-          <button class="icon-button" value="cancel" aria-label="Закрити">
+          <button
+            type="button"
+            class="icon-button"
+            data-close="settingsDialog"
+            aria-label="Закрити"
+          >
             ✕
           </button>
         </div>
@@ -456,109 +552,181 @@
             >
           </div>
         </section>
-        <label
-          >Режим<select id="modeSelect">
-            <option value="demo">Демо — ознайомитися з застосунком</option>
-            <option value="cloud">Acceleronix Cloud — реальні дані</option>
-          </select></label
-        >
-        <div id="loginFields" class="form-stack">
+        <details class="settings-group" open>
+          <summary>Підключення Wonderfree</summary>
           <label
-            >Email Wonderfree<input
-              id="email"
-              type="email"
-              autocomplete="username"
-              placeholder="you@example.com" /></label
-          ><label
-            >Пароль Wonderfree<input
-              id="password"
-              type="password"
-              autocomplete="current-password"
-              placeholder="Не зберігається" /></label
-          ><button type="button" class="primary-button" id="loginBtn">
-            Увійти безпечно
+            >Режим<select id="modeSelect">
+              <option value="demo">Демо — ознайомитися з застосунком</option>
+              <option value="cloud">Acceleronix Cloud — реальні дані</option>
+            </select></label
+          >
+          <div id="loginFields" class="form-stack">
+            <label
+              >Email Wonderfree<input
+                id="email"
+                type="email"
+                autocomplete="username"
+                placeholder="you@example.com" /></label
+            ><label
+              >Пароль Wonderfree<input
+                id="password"
+                type="password"
+                autocomplete="current-password"
+                placeholder="Не зберігається" /></label
+            ><button type="button" class="primary-button" id="loginBtn">
+              Увійти безпечно
+            </button>
+          </div>
+          <label
+            >Станція<select id="deviceSelect" disabled>
+              <option>Спершу увійдіть</option>
+            </select></label
+          >
+          <div id="loginStatus" class="login-status" role="status"></div>
+        </details>
+        <details class="settings-group" open>
+          <summary>Моніторинг і вигляд</summary>
+          <label
+            >Вигляд<select id="textSizeSelect">
+              <option value="normal">Стандартний текст</option>
+              <option value="large">Великий текст</option>
+            </select></label
+          >
+          <section class="notification-box">
+            <div>
+              <b>Попередження про низький заряд</b
+              ><small
+                >Показується, коли OUKITEL Home відкритий і
+                синхронізується.</small
+              >
+            </div>
+            <label class="toggle"
+              ><input
+                id="alertEnabled"
+                type="checkbox"
+                aria-label="Попередження про низький заряд" /><i></i
+            ></label>
+          </section>
+          <section class="notification-box monitor-box">
+            <div>
+              <b>Фоновий збір фактичного споживання</b
+              ><small id="monitorSettingsCopy"
+                >Сервер зчитує лише телеметрію кожні 5 хвилин, навіть коли
+                застосунок закритий. Команди на станцію не надсилаються.</small
+              >
+            </div>
+            <label class="toggle"
+              ><input
+                id="monitorEnabled"
+                type="checkbox"
+                aria-label="Фоновий збір споживання" /><i></i
+            ></label>
+          </section>
+          <label id="alertThresholdLabel"
+            >Попереджати нижче <strong id="alertThresholdValue">20%</strong
+            ><input
+              id="alertThreshold"
+              type="range"
+              min="5"
+              max="50"
+              step="5"
+              value="20"
+          /></label>
+        </details>
+        <details class="settings-group">
+          <summary>Приватність і дані</summary>
+          <div class="privacy-note">
+            <b>Приватність.</b> Пароль використовується лише для входу через
+            HTTPS. Якщо увімкнути фоновий збір, службовий token шифрується на
+            сервері, а нові вимірювання зберігаються до 31 дня. Плани — лише на
+            цьому пристрої. Зупинка збору не стирає історію. Пароль не
+            зберігається.
+          </div>
+          <div class="button-grid">
+            <button type="button" class="secondary-button" id="exportBtn">
+              Експорт даних</button
+            ><button type="button" class="secondary-button" id="importBtn">
+              Імпорт даних
+            </button>
+          </div>
+          <input
+            id="importFile"
+            type="file"
+            accept="application/json"
+            hidden
+          /><button type="button" class="danger-button" id="clearDataBtn">
+            Стерти локальну історію і плани</button
+          ><button type="button" class="danger-button" id="logoutBtn">
+            Вийти та зупинити фоновий збір
+          </button>
+        </details>
+        <button type="button" class="primary-button" id="saveBtn">
+          Зберегти налаштування
+        </button>
+        <button type="button" class="text-button" data-info="install">
+          Як встановити на iPhone
+        </button>
+        <button type="button" class="secondary-button hidden" id="updateBtn">
+          Оновити застосунок
+        </button>
+        <p id="appVersion" class="version-label"></p>
+      </form>
+    </dialog>
+    <dialog id="editLoadDialog" aria-labelledby="editLoadTitle">
+      <form id="editLoadForm" class="dialog-panel settings-panel">
+        <div class="dialog-head">
+          <h2 id="editLoadTitle">Ваш прилад</h2>
+          <button
+            type="button"
+            class="icon-button"
+            data-close="editLoadDialog"
+            aria-label="Закрити"
+          >
+            ✕
           </button>
         </div>
+        <label>Назва<input id="editLoadName" maxlength="40" required /></label>
         <label
-          >Станція<select id="deviceSelect" disabled>
-            <option>Спершу увійдіть</option>
-          </select></label
-        ><label
-          >Вигляд<select id="textSizeSelect">
-            <option value="normal">Стандартний текст</option>
-            <option value="large">Великий текст</option>
-          </select></label
-        >
-        <section class="notification-box">
-          <div>
-            <b>Попередження про низький заряд</b
-            ><small
-              >Показується, коли OUKITEL Home відкритий і
-              синхронізується.</small
-            >
-          </div>
-          <label class="toggle"
-            ><input id="alertEnabled" type="checkbox" /><i></i
-          ></label>
-        </section>
-        <section class="notification-box monitor-box">
-          <div>
-            <b>Фоновий збір фактичного споживання</b
-            ><small id="monitorSettingsCopy"
-              >Сервер зчитує лише телеметрію кожні 5 хвилин, навіть коли
-              застосунок закритий. Команди на станцію не надсилаються.</small
-            >
-          </div>
-          <label class="toggle"
-            ><input id="monitorEnabled" type="checkbox" /><i></i
-          ></label>
-        </section>
-        <label id="alertThresholdLabel"
-          >Попереджати нижче <strong id="alertThresholdValue">20%</strong
-          ><input
-            id="alertThreshold"
-            type="range"
-            min="5"
-            max="50"
-            step="5"
-            value="20"
+          >Номінальна потужність, Вт<input
+            id="editLoadW"
+            type="number"
+            min="1"
+            max="2400"
+            step="any"
+            inputmode="decimal"
+            required
         /></label>
-        <div class="privacy-note">
-          <b>Приватність.</b> Пароль використовується лише для входу через
-          HTTPS. Якщо увімкнути фоновий збір, службовий token шифрується на
-          сервері, а вимірювання зберігаються 14 днів. Плани — лише на цьому
-          iPhone.
-        </div>
-        <div id="loginStatus" class="login-status" role="status"></div>
-        <button type="button" class="secondary-button" id="saveBtn">
-          Зберегти та підключити
-        </button>
-        <div class="button-grid">
-          <button type="button" class="secondary-button" id="exportBtn">
-            Експорт даних</button
-          ><button type="button" class="secondary-button" id="importBtn">
-            Імпорт даних
-          </button>
-        </div>
-        <input
-          id="importFile"
-          type="file"
-          accept="application/json"
-          hidden
-        /><button type="button" class="danger-button" id="clearDataBtn">
-          Стерти локальну історію і плани</button
-        ><button type="button" class="danger-button" id="logoutBtn">
-          Вийти та стерти cloud-сесію
-        </button>
+        <label
+          >Середнє споживання, Вт<input
+            id="editLoadAverage"
+            type="number"
+            min="0"
+            max="2400"
+            step="any"
+            inputmode="decimal"
+            placeholder="Порожнє — використовувати номінал"
+        /></label>
+        <p class="privacy-note">
+          Для циклічного приладу можна ввести відоме середнє. Виміряне значення
+          — оцінка, що залежить від умов роботи.
+        </p>
+        <button class="primary-button" type="submit">Зберегти прилад</button>
       </form>
     </dialog>
     <dialog id="infoDialog">
       <section class="dialog-panel info-panel">
-        <button class="icon-button dialog-close" aria-label="Закрити">✕</button>
+        <button
+          class="icon-button dialog-close"
+          data-close="infoDialog"
+          aria-label="Закрити"
+        >
+          ✕
+        </button>
         <div id="infoContent"></div>
       </section>
     </dialog>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script type="module" src="/app.js"></script>
+    <noscript>Для роботи застосунку потрібно ввімкнути JavaScript.</noscript>
+    <script type="module" src="/app.js?v=3.2.0"></script>
   </body>
 </html>

@@ -14,14 +14,7 @@ crons = ["* * * * *"]
 binding = "SESSIONS"
 id = "e37cddc68d094b5797123329d380cfa0"
 
-
-# Preferred scalable monitoring storage.
-# Create it with:
-#   npx wrangler d1 create oukitel-home
-# Then paste the returned database_id below and uncomment this block.
-# Apply migrations with:
-#   npx wrangler d1 migrations apply oukitel-home --remote
-#
+# Optional scalable storage. Apply BOTH migrations before deploying with DB.
 # [[d1_databases]]
 # binding = "DB"
 # database_name = "oukitel-home"
