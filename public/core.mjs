@@ -120,6 +120,9 @@ export function connectionState({
   if (reportedAt && now - Number(reportedAt) > 12 * 60000) return "stale";
   if (!updated) return "waiting";
   if (now - new Date(updated).getTime() > 2 * 60000) return "stale";
+  // A fresh HTTP response only confirms that the cloud answered. Its shadow
+  // can contain old readings even while the device is marked online.
+  if (!reportedAt) return online === true ? "unverified" : "unknown";
   return online === true ? "online" : "unknown";
 }
 

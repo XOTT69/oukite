@@ -83,7 +83,7 @@ export default {
         return json({
           ok: true,
           mode: "cloud-read-only",
-          version: "3.1.2",
+          version: "3.2.0",
           storage: hasD1(env) ? "d1" : "kv-fallback",
           sessionEncryption: !!env.MONITOR_KEY,
         });
@@ -513,9 +513,9 @@ async function sampleMonitor(env, id, record, now = Date.now()) {
     const reportedAt = reportedTime(raw, now);
     if (reportedAt && now - reportedAt > SAMPLE_MAX_GAP_MS)
       throw new CloudError("Хмара повернула застарілі вимірювання.", 503);
-    if (device.online == null && !reportedAt)
+    if (!reportedAt)
       throw new CloudError(
-        "Статус станції та час вимірювання невідомі. Збір призупинено, щоб не навчатися на кешованих даних.",
+        "Хмара не передає час вимірювання. Не записуємо повтори кешованих даних як нову історію.",
         503,
       );
     const current = await getMonitor(env, id);
@@ -525,9 +525,9 @@ async function sampleMonitor(env, id, record, now = Date.now()) {
       await putMonitor(env, id, record);
       return;
     }
-    sample.timeSource = reportedAt ? "device" : "cloud-poll";
-    sample.at = reportedAt || now;
-    if (reportedAt) record.lastReportedAt = reportedAt;
+    sample.timeSource = "device";
+    sample.at = reportedAt;
+    record.lastReportedAt = reportedAt;
     record.lastSampleAt = now;
     record.lastError = null;
     record.authRequired = false;

@@ -183,7 +183,8 @@ test("availability separates unknown, confirmed offline, expired auth and errors
   assert.equal(normalizeOnline(2), null);
   assert.equal(connectionState(base), "unknown");
   assert.equal(connectionState({ ...base, online: false }), "offline");
-  assert.equal(connectionState({ ...base, online: true }), "online");
+  assert.equal(connectionState({ ...base, online: true }), "unverified");
+  assert.equal(connectionState({ ...base, online: true, reportedAt: now }), "online");
   assert.equal(
     connectionState({ ...base, online: true, phase: "auth-required" }),
     "auth-required",

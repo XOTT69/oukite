@@ -10,7 +10,7 @@ const device = {
 const accountId = "a".repeat(64);
 async function setup(
   page,
-  { online = true, stateError = null, attributes = null, cached = false, historySamples = [] } = {},
+  { online = true, stateError = null, attributes = null, cached = false, historySamples = [], timestamp = true } = {},
 ) {
   const now = Date.now();
   await page.addInitScript(
@@ -64,13 +64,13 @@ async function setup(
         json: {
           data: {
             customizeTslInfo: attributes ?? [
-              { abId: 1, resourceValce: 73 },
-              { abId: 4, resourceValce: 0 },
-              { abId: 5, resourceValce: 50 },
+              { abId: 1, resourceValce: 73, ...(timestamp ? { updateTime: Date.now() } : {}) },
+              { abId: 4, resourceValce: 0, ...(timestamp ? { updateTime: Date.now() } : {}) },
+              { abId: 5, resourceValce: 50, ...(timestamp ? { updateTime: Date.now() } : {}) },
               { abId: 43, resourceValce: true },
             ],
           },
-          connection: { online, receivedAt: Date.now(), reportedAt: null },
+          connection: { online, receivedAt: Date.now(), reportedAt: attributes?.find((x) => [1, 4, 5].includes(x.abId) && x.updateTime)?.updateTime ?? (attributes ? null : timestamp ? Date.now() : null) },
         },
       });
     }
@@ -98,9 +98,9 @@ test("unknown availability still fetches telemetry and never says offline", asyn
 test("activity shows measured hours and starts background collection for one station", async ({ page }) => {
   const now = Date.now();
   const points = [
-    { at: now - 15*60000, soc: 80, input: 0, output: 0 },
-    { at: now - 10*60000, soc: 80, input: 0, output: 100 },
-    { at: now - 5*60000, soc: 79, input: 0, output: 100 },
+    { at: now - 15*60000, soc: 80, input: 0, output: 0, timeSource: "device" },
+    { at: now - 10*60000, soc: 80, input: 0, output: 100, timeSource: "device" },
+    { at: now - 5*60000, soc: 79, input: 0, output: 100, timeSource: "device" },
   ];
   const access = await setup(page, { historySamples: points });
   await expect.poll(access.monitorEnabled).toBe(true);
@@ -134,7 +134,7 @@ test("confirmed online and offline are distinct", async ({ page }) => {
   await expect(page.locator("#soc")).toHaveText("—");
   await expect(page.locator("#energy")).toHaveText("— кВт·год");
   await expect(page.locator("#cachedCharge")).toContainText(
-    "Останній запис заряду в хмарі: 89%",
+    "Останній хмарний знімок заряду: 89%",
   );
   await expect(page.locator("#cachedCharge")).toContainText(
     "Це не поточний заряд",
@@ -165,11 +165,11 @@ test("re-login refreshes the dashboard without a second save step", async ({ pag
   await page.route("**/api/state?**", (route) => route.fulfill({
     json: {
       data: { customizeTslInfo: [
-        { abId: 1, resourceValce: 72 },
-        { abId: 4, resourceValce: 0 },
-        { abId: 5, resourceValce: 40 },
+        { abId: 1, resourceValce: 72, updateTime: Date.now() },
+        { abId: 4, resourceValce: 0, updateTime: Date.now() },
+        { abId: 5, resourceValce: 40, updateTime: Date.now() },
       ] },
-      connection: { online: true, receivedAt: Date.now(), reportedAt: null },
+      connection: { online: true, receivedAt: Date.now(), reportedAt: Date.now() },
     },
   }));
   await page.locator("#connectBtn").click();
@@ -223,6 +223,18 @@ test("offline cached 89 becomes 100 only after a new online cloud reading", asyn
   await expect(page.locator("#cachedCharge")).toBeHidden();
   await expect(page.locator("#readyHours")).not.toHaveText("—");
 });
+test("cloud online without measurement time is not presented as live", async ({ page }) => {
+  await setup(page, { timestamp: false, historySamples: [
+    { at: Date.now() - 300000, soc: 78, input: 0, output: 88, timeSource: "cloud-poll" },
+  ] });
+  await expect(page.locator("#statusText")).toContainText("дані не підтверджені");
+  await expect(page.locator("#soc")).toHaveText("—");
+  await expect(page.locator("#cachedCharge")).toContainText("73%");
+  await expect(page.locator("#readyHours")).toHaveText("—");
+  await page.getByRole("navigation").getByRole("button", { name: "Історія", exact: true }).click();
+  await expect(page.locator("#historyCount")).toHaveText("0");
+  await expect(page.locator("#historyLead")).toContainText("старих хмарних точок");
+});
 test("old battery timestamp remains unconfirmed even when power has a fresh timestamp", async ({
   page,
 }) => {
@@ -254,7 +266,7 @@ test("cloud failure preserves only a real scoped snapshot", async ({
 test("partial telemetry leaves unknown outputs and ports blank", async ({
   page,
 }) => {
-  await setup(page, { attributes: [{ abId: 1, resourceValce: 73 }] });
+  await setup(page, { attributes: [{ abId: 1, resourceValce: 73, updateTime: Date.now() }] });
   await expect(page.locator("#soc")).toHaveText("73%");
   await expect(page.locator("#outputW")).toHaveText("—");
   await expect(page.locator("#usbState")).toHaveText("Невідомо");

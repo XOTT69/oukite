@@ -425,6 +425,8 @@ test("failed vendor logins are rate limited without exposing a session", async (
 
 test("background monitor encrypts its cloud token and records telemetry while the PWA is closed", async () => {
   const originalFetch = globalThis.fetch;
+  const measurementAt = Date.now();
+  let includeTimestamp = true;
   globalThis.fetch = async (url) => {
     const endpoint = String(url);
     if (endpoint.includes("emailPwdLogin"))
@@ -451,9 +453,9 @@ test("background monitor encrypts its cloud token and records telemetry while th
         code: 0,
         data: {
           customizeTslInfo: [
-            { abId: 1, resourceValce: "75" },
-            { abId: 4, resourceValce: "12" },
-            { abId: 5, resourceValce: "43" },
+            { abId: 1, resourceValce: "75", ...(includeTimestamp ? { updateTime: measurementAt } : {}) },
+            { abId: 4, resourceValce: "12", ...(includeTimestamp ? { updateTime: measurementAt } : {}) },
+            { abId: 5, resourceValce: "43", ...(includeTimestamp ? { updateTime: measurementAt } : {}) },
           ],
         },
       });
@@ -517,8 +519,26 @@ test("background monitor encrypts its cloud token and records telemetry while th
       soc: 75,
       input: 12,
       output: 43,
-      timeSource: "cloud-poll",
+      timeSource: "device",
     });
+    const monitorKey = [...env.SESSIONS.values.keys()].find((key) => key.startsWith("monitor:"));
+    const stored = JSON.parse(env.SESSIONS.values.get(monitorKey));
+    stored.lastAttemptAt = Date.now() - 10 * 60000;
+    env.SESSIONS.values.set(monitorKey, JSON.stringify(stored));
+    const repeated = [];
+    await worker.scheduled({}, env, { waitUntil: (promise) => repeated.push(promise) });
+    await Promise.all(repeated);
+    assert.equal([...env.SESSIONS.values.keys()].filter((key) => key.startsWith("sample:")).length, 1);
+
+    includeTimestamp = false;
+    const withoutTime = JSON.parse(env.SESSIONS.values.get(monitorKey));
+    withoutTime.lastAttemptAt = Date.now() - 10 * 60000;
+    env.SESSIONS.values.set(monitorKey, JSON.stringify(withoutTime));
+    const missing = [];
+    await worker.scheduled({}, env, { waitUntil: (promise) => missing.push(promise) });
+    await Promise.all(missing);
+    assert.equal([...env.SESSIONS.values.keys()].filter((key) => key.startsWith("sample:")).length, 1);
+    assert.match(JSON.parse(env.SESSIONS.values.get(monitorKey)).lastError, /час вимірювання/);
   } finally {
     globalThis.fetch = originalFetch;
   }

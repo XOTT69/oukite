@@ -15,10 +15,10 @@ import {
   mapAttrs,
   reportedTime,
   usableEnergy,
-} from "/core.mjs?v=3.1.2";
+} from "/core.mjs?v=3.2.0";
 const $ = (id) => document.getElementById(id),
   KEY = "oukitel_ui",
-  VERSION = "3.1.2";
+  VERSION = "3.2.0";
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const safe = (v) =>
   String(v ?? "").replace(
@@ -230,6 +230,7 @@ function normalizeHistory(raw) {
             soc: Number(x.soc),
             input: Number(x.input),
             output: Number(x.output),
+            timeSource: x.timeSource === "device" ? "device" : "unverified",
             ...Object.fromEntries(
               ["ac", "usb", "dc"]
                 .filter((k) => typeof x[k] === "boolean")
@@ -276,7 +277,7 @@ function loadData() {
   const data = scope() ? read(scope(), {}) : {};
   history = normalizeHistory(data.history);
   activity = (Array.isArray(data.activity) ? data.activity : [])
-    .filter((x) => x && Number.isFinite(x.at) && typeof x.text === "string")
+    .filter((x) => x && Number.isFinite(x.at) && typeof x.text === "string" && x.timeSource === "device")
     .slice(0, 32);
   const s = data.snapshot;
   state =
@@ -311,23 +312,14 @@ const status = () =>
     updated: state.updated,
     reportedAt: state.reportedAt,
   });
-const canMeasure = () =>
-  cloud() &&
-  phase === "ready" &&
-  state.updated != null &&
-  Date.now() - Number(state.updated) <= 2 * 60000 &&
-  chosen()?.online !== false &&
-  (chosen()?.online === true ||
-    (state.reportedAt && Date.now() - state.reportedAt <= 12 * 60000)) &&
-  (!state.reportedAt || Date.now() - state.reportedAt <= 12 * 60000);
+const canMeasure = () => status() === "online" &&
+  !!state.chargeReportedAt &&
+  Date.now() - Number(state.chargeReportedAt) <= 12 * 60000;
+const verifiedHistory = () => history.filter((x) => x.timeSource === "device");
 const liveCharge = () =>
   currentCharge(state.soc, {
     mode: settings.mode,
-    available:
-      canMeasure() &&
-      (!state.chargeReportedAt ||
-        Date.now() - state.chargeReportedAt <= 12 * 60000) &&
-      (chosen()?.online === true || !!state.chargeReportedAt),
+    available: canMeasure(),
   });
 async function api(path, options = {}) {
   const ctl = new AbortController(),
@@ -411,7 +403,12 @@ const STATUS = {
   online: [
     "Станція онлайн",
     "Станція доступна у хмарі",
-    "Статус перевірено під час останньої синхронізації.",
+    "Є підтверджений час вимірювання станції.",
+  ],
+  unverified: [
+    "Хмара: онлайн · дані не підтверджені",
+    "Хмара відповідає, але показники можуть бути старими",
+    "Час вимірювання відсутній. Відкриття Wonderfree може оновити хмарний знімок; наше опитування не запускає вимірювання.",
   ],
   unknown: [
     "Статус невідомий",
@@ -474,13 +471,13 @@ function renderConnection() {
       ? "Фоновий збір: потрібен повторний вхід"
       : monitor.enabled
         ? monitor.lastError
-          ? "Фоновий збір призупинено: " + monitor.lastError
-          : "Фоновий збір · кожні 5 хв · " + freshLabel(monitor.lastSampleAt)
-        : "Фоновий збір не активний";
+          ? "Опитування хмари: " + monitor.lastError
+          : "Опитування хмари · кожні 5 хв · останній підтверджений запис " + freshLabel(monitor.lastSampleAt)
+        : "Опитування хмари не активне";
 }
 const forecastNow = () =>
   adaptiveForecast(
-    canMeasure() ? history : [],
+    canMeasure() ? verifiedHistory() : [],
     liveCharge(),
     settings.reserve,
     0,
@@ -521,7 +518,7 @@ function render() {
     !cloud() || soc != null || state.soc == null,
   );
   $("cachedCharge").textContent =
-    "Останній запис заряду в хмарі: " +
+    "Останній хмарний знімок заряду: " +
     Math.round(state.soc) +
     "%. " +
     (state.chargeReportedAt
@@ -538,7 +535,7 @@ function render() {
         " · без подальшого заряджання · до резерву " +
         settings.reserve +
         "%."
-      : "Для актуального прогнозу потрібні доступна станція та вимірювання."
+      : "Для актуального прогнозу потрібен підтверджений час вимірювання. Відповідь хмари сама по собі не доводить свіжість."
     : "Підключіть станцію для фактичного прогнозу.";
   $("homeForecastEta").textContent =
     minutes != null && minutes > 0 && minutes < 525600
@@ -555,10 +552,13 @@ function render() {
   $("inputW").textContent = w(state.input);
   $("outputW").textContent = w(state.output);
   $("inputDetail").textContent =
+    (canMeasure() ? "" : "Останній знімок · ") +
     "AC " + w(state.acInput) + " · сонце/DC " + w(state.dcInput);
   $("outputDetail").textContent =
     state.output == null
       ? "Ще немає вимірювання"
+      : !canMeasure()
+        ? "Останній хмарний знімок · не LIVE"
       : state.output
         ? "Сумарне споживання приладів"
         : "Зараз без навантаження";
@@ -718,7 +718,7 @@ function calibrationForecast() {
   const c = settings.calibration;
   return c
     ? adaptiveForecast(
-        history.filter((x) => x.at >= c.startedAt),
+        verifiedHistory().filter((x) => x.at >= c.startedAt),
         state.soc,
         settings.reserve,
         0,
@@ -793,9 +793,10 @@ function renderAdaptive(forecast) {
     $("calibrationBox").innerHTML = html;
 }
 function renderHistory() {
-  const entries = history.filter(
+  const archived = history.filter(
       (x) => x.at >= Date.now() - settings.historyRange * 36e5,
     ),
+    entries = archived.filter((x) => x.timeSource === "device"),
     s = historyStats(entries),
     energy = energyFromSamples(entries),
     usage = activityFromSamples(entries);
@@ -807,9 +808,11 @@ function renderHistory() {
       : (s.socChange > 0 ? "+" : "") + Math.round(s.socChange) + "%";
   $("historyCount").textContent = entries.length;
   $("historyLead").textContent = entries.length
-    ? "Історія лише обраної станції. Пропуски не заповнюються вигаданими даними."
+    ? "Історія лише обраної станції з часом вимірювання. Пропуски не заповнюються."
+    : archived.length
+      ? "Є " + archived.length + " старих хмарних точок без підтвердженого часу вимірювання. Їх збережено, але виключено з графіка й розрахунків."
     : monitor.enabled
-      ? "Фоновий збір активний. Чекаємо перші вимірювання."
+      ? "Хмару опитуємо. Чекаємо вимірювання з підтвердженим часом."
       : "Підключіть станцію та увімкніть фоновий збір.";
   $("historyEnergy").textContent = entries.length ? wh(energy.wh) : "—";
   $("historyCoverage").textContent =
@@ -1067,14 +1070,16 @@ function record() {
     state.output == null
   )
     return;
-  const at = state.reportedAt || Date.now(),
-    old = history.at(-1);
+  const at = state.reportedAt,
+    old = verifiedHistory().at(-1);
+  if (!at) return;
   if (old && at - old.at < 240000) return;
   const p = {
     at,
     soc: state.soc,
     input: state.input,
     output: state.output,
+    timeSource: "device",
     ...Object.fromEntries(
       ["ac", "usb", "dc"]
         .filter((k) => typeof state[k] === "boolean")
@@ -1091,7 +1096,7 @@ function record() {
       )
       .map((k) => k.toUpperCase() + ": " + yes(p[k]));
     if (changes.length)
-      activity = [{ at, text: changes.join(" · ") }, ...activity].slice(0, 32);
+      activity = [{ at, text: changes.join(" · "), timeSource: "device" }, ...activity].slice(0, 32);
   }
   history = normalizeHistory([...history, p]);
   save();
@@ -1211,8 +1216,8 @@ function settingsOpen() {
     monitor.state === "auth-required"
       ? "Потрібен повторний вхід для фонового збору."
       : monitor.enabled
-        ? "Активний · раз на 5 хвилин · історія до 31 дня."
-        : "Працює при закритій PWA, якщо станція має інтернет. Після завершення хмарної сесії потрібен повторний вхід.";
+        ? "Опитує хмару раз на 5 хвилин навіть при закритій PWA. Без часу вимірювання нові точки не записуються; це не локальний зв’язок зі станцією."
+        : "Опитування працює при закритій PWA, але не змушує станцію передавати нові показники. Після завершення хмарної сесії потрібен повторний вхід.";
   $("loginStatus").className = "login-status";
   $("loginStatus").textContent =
     phase === "auth-required"
@@ -1361,7 +1366,7 @@ function info(kind) {
     ],
     diagnostics: [
       "Доступність і актуальність",
-      "Онлайн — статус хмари під час останньої перевірки. Отримано — коли сервер прочитав хмарні дані. Час вимірювання — окрема позначка станції, якщо її передала хмара. Невідомий статус не означає офлайн. Напруга й частота — параметри AC; BMS та інвертор — версії модулів.",
+      "Онлайн у списку — лише статус хмари. Отримано — коли сервер прочитав збережений хмарний знімок. LIVE і прогноз доступні лише за підтвердженим часом вимірювання. Хмарне опитування не змушує станцію передати нові дані. Для незалежного живого потоку потрібен локальний міст у тій самій мережі, що й станція.",
     ],
     install: [
       "Встановити на iPhone",
