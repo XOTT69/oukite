@@ -152,6 +152,46 @@ export function energyFromSamples(entries, maxGapMs = 12 * 60 * 1000) {
   return { wh, coveredMs, samples };
 }
 
+// This is observation time, not the station's physical power-on counter.
+// Never bridge missing cloud data or extrapolate a final sample to "now".
+export function activityFromSamples(entries, now = Date.now(), maxGapMs = 12 * 60 * 1000) {
+  const samples = energyFromSamples(entries, maxGapMs).samples.filter(
+    (x) => Number(x.at) <= now,
+  );
+  let observedMs = 0,
+    supplyingMs = 0,
+    chargingMs = 0,
+    currentSessionStart = samples.at(-1)?.at ?? null;
+  for (let i = 1; i < samples.length; i++) {
+    const a = samples[i - 1],
+      b = samples[i],
+      gap = Number(b.at) - Number(a.at);
+    if (gap <= 0 || gap > maxGapMs) continue;
+    observedMs += gap;
+    if ((Number(a.output) + Number(b.output)) / 2 >= 10) supplyingMs += gap;
+    if ((Number(a.input) + Number(b.input)) / 2 >= 10) chargingMs += gap;
+  }
+  if (currentSessionStart != null) {
+    for (let i = samples.length - 1; i > 0; i--) {
+      const gap = Number(samples[i].at) - Number(samples[i - 1].at);
+      if (gap <= 0 || gap > maxGapMs) break;
+      currentSessionStart = Number(samples[i - 1].at);
+    }
+  }
+  return {
+    observedMs,
+    supplyingMs,
+    chargingMs,
+    currentSessionMs:
+      currentSessionStart != null &&
+      now - Number(samples.at(-1).at) <= maxGapMs
+        ? Number(samples.at(-1).at) - currentSessionStart
+        : null,
+    firstAt: samples[0]?.at ?? null,
+    lastAt: samples.at(-1)?.at ?? null,
+  };
+}
+
 export function adaptiveForecast(
   entries,
   soc,

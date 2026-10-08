@@ -83,7 +83,7 @@ export default {
         return json({
           ok: true,
           mode: "cloud-read-only",
-          version: "3.0.1",
+          version: "3.1.0",
           storage: hasD1(env) ? "d1" : "kv-fallback",
           sessionEncryption: !!env.MONITOR_KEY,
         });
@@ -122,7 +122,15 @@ export default {
       // Do not log vendor responses, request bodies, identifiers or tokens.
       console.error(
         "OUKITEL request failed",
-        error instanceof CloudError ? error.status : 502,
+        JSON.stringify({
+          route: url.pathname,
+          status: error instanceof CloudError ? error.status : 502,
+          stage: error instanceof CloudError ? error.stage || null : null,
+          vendorStatus:
+            error instanceof CloudError ? error.vendorStatus || null : null,
+          vendorCode:
+            error instanceof CloudError ? error.vendorCode ?? null : null,
+        }),
       );
       return json(
         {
@@ -134,6 +142,15 @@ export default {
             error instanceof CloudError
               ? error.message
               : "Помилка підключення до хмари.",
+          ...(error instanceof CloudError && error.stage
+            ? { stage: error.stage }
+            : {}),
+          ...(error instanceof CloudError && error.vendorStatus
+            ? { vendorStatus: error.vendorStatus }
+            : {}),
+          ...(error instanceof CloudError && error.vendorCode != null
+            ? { vendorCode: error.vendorCode }
+            : {}),
         },
         error instanceof CloudError ? error.status : 502,
       );
@@ -611,10 +628,13 @@ async function accountDevices(token) {
   const raw = await cloudGet(
     "/v2/binding/enduserapi/userDeviceList?pageNumber=1&pageSize=50",
     token,
+    "devices",
   );
   const list = raw?.data?.list;
   if (!Array.isArray(list))
-    throw new CloudError("Не вдалося отримати список станцій.", 502);
+    throw new CloudError("Не вдалося отримати список станцій.", 502, {
+      stage: "devices",
+    });
   return list
     .map((item) => ({
       productKey: String(item.productKey || ""),
@@ -644,6 +664,7 @@ async function state(url, token) {
   const payload = await cloudGet(
     `/v2/binding/enduserapi/getDeviceBusinessAttributes?pk=${encodeURIComponent(device.productKey)}&dk=${encodeURIComponent(device.deviceKey)}`,
     token,
+    "telemetry",
   );
   const telemetry = mapAttrs(payload, emptyState());
   if (
@@ -654,6 +675,7 @@ async function state(url, token) {
     throw new CloudError(
       "Хмара не повернула показників станції. Спробуйте оновити пізніше.",
       502,
+      { stage: "telemetry" },
     );
   return noStore({
     ...payload,
@@ -712,13 +734,19 @@ async function cloudLogin(email, password) {
   const token = result?.data?.accessToken?.token;
   if (!token)
     throw new CloudError("Не вдалося увійти. Перевірте email і пароль.", 401);
-  return token.startsWith("Bearer ") ? token : `Bearer ${token}`;
+  // Wonderfree sends the accessToken value directly in Authorization.
+  return token;
 }
-async function cloudGet(path, token) {
-  const response = await vendorFetch(EU.base + path, {
-    headers: cloudHeaders(token),
-  });
-  return parseCloud(response, "Помилка Quectel Cloud.");
+async function cloudGet(path, token, stage = "cloud") {
+  try {
+    const response = await vendorFetch(EU.base + path, {
+      headers: cloudHeaders(token),
+    });
+    return parseCloud(response, "Помилка Quectel Cloud.", stage);
+  } catch (error) {
+    if (error instanceof CloudError && !error.stage) error.stage = stage;
+    throw error;
+  }
 }
 async function vendorFetch(url, options) {
   const controller = new AbortController();
@@ -735,33 +763,40 @@ function cloudHeaders(token) {
   const headers = {
     "X-Q-Language": "en",
     "quec-random-url": crypto.randomUUID(),
-    "app-info": JSON.stringify({ userDomain: EU.userDomain }),
+    "app-info": "[Pixel][Google][raven][33]",
   };
-  if (token) headers.Authorization = token;
+  // Strip the prefix from sessions issued by older releases as well.
+  if (token) headers.Authorization = String(token).replace(/^Bearer\s+/i, "");
   return headers;
 }
-async function parseCloud(response, fallback) {
+async function parseCloud(response, fallback, stage = "login") {
   const body = await response.json().catch(() => null);
+  const vendorCode = body?.code == null ? null : Number(body.code);
+  const details = {
+    stage,
+    vendorStatus: response.status,
+    vendorCode: Number.isSafeInteger(vendorCode) ? vendorCode : null,
+  };
   const authError =
-    response.status === 401 || [401, 4001, 1003].includes(Number(body?.code));
+    response.status === 401 || [401, 4001, 1003].includes(vendorCode);
   if (authError)
-    throw new CloudError("Сесія Quectel завершилась. Увійдіть знову.", 401);
+    throw new CloudError(
+      "Сесія Quectel завершилась. Увійдіть знову.",
+      401,
+      details,
+    );
   if (!response.ok)
     throw new CloudError(
-      response.status === 401
-        ? "Сесія Quectel завершилась. Увійдіть знову."
+      response.status === 429
+        ? "Хмара обмежила частоту запитів. Повторіть трохи пізніше."
         : fallback,
-      response.status === 401 ? 401 : 502,
+      response.status === 429 ? 429 : 502,
+      details,
     );
   if (body && body.code != null && ![0, 200].includes(Number(body.code)))
-    throw new CloudError(
-      body.code === 401
-        ? "Сесія Quectel завершилась. Увійдіть знову."
-        : fallback,
-      body.code === 401 ? 401 : 502,
-    );
+    throw new CloudError(fallback, 502, details);
   if (!body || typeof body !== "object")
-    throw new CloudError("Хмара повернула некоректну відповідь.", 502);
+    throw new CloudError("Хмара повернула некоректну відповідь.", 502, details);
   return body;
 }
 function noStore(body) {
@@ -904,9 +939,12 @@ async function sha256hex(value) {
     .join("");
 }
 class CloudError extends Error {
-  constructor(message, status) {
+  constructor(message, status, details = {}) {
     super(message);
     this.status = status;
+    this.stage = details.stage;
+    this.vendorStatus = details.vendorStatus;
+    this.vendorCode = details.vendorCode;
   }
 }
 

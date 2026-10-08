@@ -250,11 +250,32 @@ test("vendor string auth codes produce auth-required, not offline", async () => 
     console.error = originalError;
   }
 });
+test("cloud errors identify the failing read without exposing vendor text", async () => {
+  const original = globalThis.fetch, originalError = console.error;
+  const { env, headers } = await monitorFixture();
+  globalThis.fetch = async () => json({ code: 87321, msg: "private vendor details" });
+  console.error = () => {};
+  try {
+    const response = await worker.fetch(request("/api/devices", { headers }), env);
+    const body = await response.json();
+    assert.equal(response.status, 502);
+    assert.equal(body.stage, "devices");
+    assert.equal(body.vendorStatus, 200);
+    assert.equal(body.vendorCode, 87321);
+    assert.doesNotMatch(JSON.stringify(body), /private vendor details/);
+  } finally {
+    globalThis.fetch = original;
+    console.error = originalError;
+  }
+});
 
 test("cloud integration uses a server-side session for devices and telemetry", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => {
+  globalThis.fetch = async (url, options) => {
     const endpoint = String(url);
+    assert.equal(options.headers["app-info"], "[Pixel][Google][raven][33]");
+    if (!endpoint.includes("emailPwdLogin"))
+      assert.equal(options.headers.Authorization, "test-token");
     if (endpoint.includes("emailPwdLogin")) {
       return json({ code: 0, data: { accessToken: { token: "test-token" } } });
     }

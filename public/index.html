@@ -15,7 +15,7 @@
     <meta name="apple-mobile-web-app-title" content="OUKITEL Home" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
-    <link rel="stylesheet" href="/styles.css?v=3.0.1" />
+    <link rel="stylesheet" href="/styles.css?v=3.1.0" />
     <title>OUKITEL Home</title>
   </head>
   <body>
@@ -365,6 +365,21 @@
             Експорт історії CSV
           </button>
         </section>
+        <section class="card activity-overview">
+          <div class="section-top">
+            <div>
+              <h2>Активність станції</h2>
+              <p>Оцінка між отриманими вимірюваннями · поріг 10 Вт</p>
+            </div>
+          </div>
+          <div class="activity-metrics">
+            <div><span>Спостерігали станцію</span><strong id="observedHours">—</strong></div>
+            <div><span>Живила прилади</span><strong id="supplyingHours">—</strong></div>
+            <div><span>Заряджалася</span><strong id="chargingHours">—</strong></div>
+            <div><span>Поточна серія вимірювань</span><strong id="currentSessionHours">—</strong></div>
+          </div>
+          <p class="chart-summary" id="activityCoverageNote"></p>
+        </section>
         <section class="metric-grid">
           <article class="metric">
             <span>Пік входу</span><strong id="peakInput">—</strong
@@ -712,6 +727,6 @@
     </dialog>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <noscript>Для роботи застосунку потрібно ввімкнути JavaScript.</noscript>
-    <script type="module" src="/app.js?v=3.0.1"></script>
+    <script type="module" src="/app.js?v=3.1.0"></script>
   </body>
 </html>

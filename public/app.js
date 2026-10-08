@@ -1,5 +1,6 @@
 import {
   adaptiveForecast,
+  activityFromSamples,
   calcBudgetWithReserve,
   calcEnergy,
   currentCharge,
@@ -14,10 +15,10 @@ import {
   mapAttrs,
   reportedTime,
   usableEnergy,
-} from "/core.mjs?v=3.0.1";
+} from "/core.mjs?v=3.1.0";
 const $ = (id) => document.getElementById(id),
   KEY = "oukitel_ui",
-  VERSION = "3.0.1";
+  VERSION = "3.1.0";
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const safe = (v) =>
   String(v ?? "").replace(
@@ -342,6 +343,9 @@ async function api(path, options = {}) {
     if (!r.ok) {
       const e = new Error(j.error || "Помилка сервера (" + r.status + ")");
       e.status = r.status;
+      e.stage = j.stage;
+      e.vendorStatus = j.vendorStatus;
+      e.vendorCode = j.vendorCode;
       throw e;
     }
     return j;
@@ -793,7 +797,8 @@ function renderHistory() {
       (x) => x.at >= Date.now() - settings.historyRange * 36e5,
     ),
     s = historyStats(entries),
-    energy = energyFromSamples(entries);
+    energy = energyFromSamples(entries),
+    usage = activityFromSamples(entries);
   $("peakInput").textContent = entries.length ? w(s.peakInput) : "—";
   $("peakOutput").textContent = entries.length ? w(s.peakOutput) : "—";
   $("socChange").textContent =
@@ -809,6 +814,26 @@ function renderHistory() {
   $("historyEnergy").textContent = entries.length ? wh(energy.wh) : "—";
   $("historyCoverage").textContent =
     "Покрито " + fmtMin(energy.coveredMs / 60000) + " · енергія приблизна";
+  $("observedHours").textContent = entries.length
+    ? fmtMin(usage.observedMs / 60000)
+    : "—";
+  $("supplyingHours").textContent = entries.length
+    ? fmtMin(usage.supplyingMs / 60000)
+    : "—";
+  $("chargingHours").textContent = entries.length
+    ? fmtMin(usage.chargingMs / 60000)
+    : "—";
+  $("currentSessionHours").textContent =
+    usage.currentSessionMs == null
+      ? "—"
+      : fmtMin(usage.currentSessionMs / 60000);
+  $("activityCoverageNote").textContent = entries.length
+    ? "За доступними вимірюваннями від " +
+      new Date(usage.firstAt).toLocaleString("uk-UA") +
+      " до " +
+      new Date(usage.lastAt).toLocaleString("uk-UA") +
+      ". Пропуски не враховано; це не лічильник фактичного часу ввімкнення."
+    : "Час активності почнемо рахувати після двох послідовних вимірювань.";
   document.querySelectorAll("[data-range]").forEach((x) => {
     const a = +x.dataset.range === settings.historyRange;
     x.classList.toggle("active", a);
@@ -822,8 +847,23 @@ function renderHistory() {
       entries.at(-1).soc +
       "%."
     : "Немає вимірювань для графіка.";
+  const detected = [];
+  for (let i = 1; i < entries.length; i++) {
+    const a = entries[i - 1], b = entries[i];
+    if (b.at - a.at > 12 * 60000) continue;
+    const changes = ["ac", "usb", "dc"]
+      .filter((k) => typeof a[k] === "boolean" && typeof b[k] === "boolean" && a[k] !== b[k])
+      .map((k) => k.toUpperCase() + ": " + yes(b[k]));
+    if (changes.length) detected.push({ at: b.at, text: changes.join(" · ") });
+    if ((a.output >= 10) !== (b.output >= 10))
+      detected.push({ at: b.at, text: b.output >= 10 ? "Навантаження з’явилось" : "Навантаження зникло" });
+    if ((a.input >= 10) !== (b.input >= 10))
+      detected.push({ at: b.at, text: b.input >= 10 ? "Заряджання почалось" : "Заряджання зупинилось" });
+  }
   $("activityList").innerHTML =
-    activity
+    [...new Map([...activity.filter((x) => x.at >= Date.now() - settings.historyRange * 36e5), ...detected].map((x) => [x.at + ":" + x.text, x])).values()]
+      .sort((a, b) => b.at - a.at)
+      .slice(0, 40)
       .map(
         (x) =>
           '<div><span aria-hidden="true">●</span><p>' +
@@ -838,7 +878,7 @@ function renderHistory() {
           "</small></p></div>",
       )
       .join("") ||
-    '<div class="empty-state">Тут з’являться зміни портів. Невідомі значення не вважаються вимкненими.</div>';
+    '<div class="empty-state">Після накопичення вимірювань тут з’являться зміни портів, навантаження й заряджання.</div>';
   const groups = new Map();
   for (let i = 1; i < entries.length; i++) {
     const a = entries[i - 1],
@@ -1110,6 +1150,18 @@ async function refresh() {
       save();
       try {
         await loadMonitor();
+        if (devices.length === 1 && monitor.state === "disabled") {
+          const result = await api("/monitor", {
+            method: "POST",
+            body: JSON.stringify({
+              enabled: true,
+              productKey: d.productKey,
+              deviceKey: d.deviceKey,
+            }),
+          });
+          monitor = result.monitor;
+          await loadMonitor(true);
+        }
       } catch (e) {
         if (e.status === 401) throw e;
         monitor = {
@@ -1125,7 +1177,22 @@ async function refresh() {
           : navigator.onLine === false
             ? "phone-offline"
             : "error";
-      banner(e.message + " Попередні показники не є поточними.");
+      const place =
+        e.stage === "devices"
+          ? "список станцій"
+          : e.stage === "telemetry"
+            ? "показники станції"
+            : "підключення";
+      const diagnostic =
+        e.vendorStatus || e.vendorCode != null
+          ? " (" +
+            place +
+            "; HTTP " +
+            (e.vendorStatus || "—") +
+            (e.vendorCode != null ? ", код " + e.vendorCode : "") +
+            ")"
+          : "";
+      banner(e.message + diagnostic + " Попередні показники не є поточними.");
     } finally {
       refreshing = null;
       render();

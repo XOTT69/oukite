@@ -10,7 +10,7 @@ const device = {
 const accountId = "a".repeat(64);
 async function setup(
   page,
-  { online = true, stateError = null, attributes = null, cached = false } = {},
+  { online = true, stateError = null, attributes = null, cached = false, historySamples = [] } = {},
 ) {
   const now = Date.now();
   await page.addInitScript(
@@ -43,6 +43,7 @@ async function setup(
     { device, accountId, now, cached },
   );
   let stateCalls = 0;
+  let monitorEnabled = false;
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/devices")
@@ -73,22 +74,43 @@ async function setup(
         },
       });
     }
+    if (path === "/api/monitor" && route.request().method() === "POST") {
+      monitorEnabled = route.request().postDataJSON()?.enabled === true;
+      return route.fulfill({ json: { monitor: { enabled: monitorEnabled, state: monitorEnabled ? "starting" : "paused", device } } });
+    }
     return route.fulfill({
-      json: { monitor: { enabled: false, state: "disabled" }, samples: [] },
+      json: { monitor: { enabled: monitorEnabled, state: monitorEnabled ? "collecting" : "disabled", device: monitorEnabled ? device : null }, samples: historySamples },
     });
   });
   await page.goto("/");
-  return () => stateCalls;
+  return { stateCalls: () => stateCalls, monitorEnabled: () => monitorEnabled };
 }
 test("unknown availability still fetches telemetry and never says offline", async ({
   page,
 }) => {
-  const calls = await setup(page, { online: null });
+  const { stateCalls: calls } = await setup(page, { online: null });
   await expect(page.locator("#soc")).toHaveText("—");
   await expect(page.locator("#cachedCharge")).toContainText("73%");
   await expect(page.locator("#statusText")).toHaveText("Статус невідомий");
   expect(calls()).toBe(1);
   await expect(page.locator("#readyHours")).toHaveText("—");
+});
+test("activity shows measured hours and starts background collection for one station", async ({ page }) => {
+  const now = Date.now();
+  const points = [
+    { at: now - 15*60000, soc: 80, input: 0, output: 0 },
+    { at: now - 10*60000, soc: 80, input: 0, output: 100 },
+    { at: now - 5*60000, soc: 79, input: 0, output: 100 },
+  ];
+  const access = await setup(page, { historySamples: points });
+  await expect.poll(access.monitorEnabled).toBe(true);
+  await page.getByRole("navigation").getByRole("button", { name: "Історія", exact: true }).click();
+  await expect(page.locator("#observedHours")).toHaveText("15 хв");
+  await expect(page.locator("#supplyingHours")).toHaveText("15 хв");
+  await expect(page.locator("#currentSessionHours")).toHaveText("15 хв");
+  await expect(page.locator("#activityList")).toContainText("Навантаження з’явилось");
+  await expect(page.locator("#activityCoverageNote")).toContainText("не лічильник фактичного часу ввімкнення");
+  await page.screenshot({ path: "artifacts/activity-" + test.info().project.name + ".png", fullPage: true });
 });
 test("confirmed online and offline are distinct", async ({ page }) => {
   await setup(page);

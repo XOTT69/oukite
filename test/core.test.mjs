@@ -16,6 +16,7 @@ import {
   reportedTime,
   emptyState,
   energyFromSamples,
+  activityFromSamples,
 } from "../public/core.mjs";
 import worker, { md5hexCorrect } from "../worker.js";
 
@@ -23,6 +24,22 @@ test("formatting and energy budget are bounded", () => {
   assert.equal(fmtMin(65), "1 год 5 хв");
   assert.equal(calcEnergy(110), 2048);
   assert.equal(Math.round(calcBudget(350, 89)), 250);
+});
+test("activity hours count only observed intervals and never cross cloud gaps", () => {
+  const t = 1700000000000, m = 60000;
+  const points = [
+    { at: t, input: 0, output: 0 },
+    { at: t + 5*m, input: 20, output: 100 },
+    { at: t + 10*m, input: 20, output: 0 },
+    { at: t + 60*m, input: 0, output: 100 },
+    { at: t + 65*m, input: 0, output: 100 },
+  ];
+  const result = activityFromSamples(points, t + 68*m);
+  assert.equal(result.observedMs, 15*m);
+  assert.equal(result.supplyingMs, 15*m);
+  assert.equal(result.chargingMs, 10*m);
+  assert.equal(result.currentSessionMs, 5*m);
+  assert.equal(activityFromSamples(points, t + 90*m).currentSessionMs, null);
 });
 test("unconfirmed cached charge is not current SOC or usable energy", () => {
   for (const available of [false, null, undefined]) {
