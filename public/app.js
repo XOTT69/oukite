@@ -15,10 +15,10 @@ import {
   mapAttrs,
   reportedTime,
   usableEnergy,
-} from "/core.mjs?v=3.1.1";
+} from "/core.mjs?v=3.1.2";
 const $ = (id) => document.getElementById(id),
   KEY = "oukitel_ui",
-  VERSION = "3.1.1";
+  VERSION = "3.1.2";
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const safe = (v) =>
   String(v ?? "").replace(
@@ -1213,7 +1213,11 @@ function settingsOpen() {
       : monitor.enabled
         ? "Активний · раз на 5 хвилин · історія до 31 дня."
         : "Працює при закритій PWA, якщо станція має інтернет. Після завершення хмарної сесії потрібен повторний вхід.";
-  $("loginStatus").textContent = "";
+  $("loginStatus").className = "login-status";
+  $("loginStatus").textContent =
+    phase === "auth-required"
+      ? "Сесія завершилась. Введіть email і пароль Wonderfree та натисніть «Увійти безпечно»."
+      : "";
   renderConnection();
   $("settingsDialog").showModal();
   if (cloud() && phase !== "auth-required")
@@ -1252,8 +1256,13 @@ async function login() {
     $("modeSelect").value = "cloud";
     $("loginStatus").className = "login-status good";
     $("loginStatus").textContent = "Акаунт підключено. Перевіряємо станцію…";
-    await devicesLoad();
     await refresh();
+    if (phase === "auth-required")
+      throw new Error(
+        "Хмара відхилила нову сесію. Перевірте, чи Wonderfree працює з цим акаунтом, і спробуйте вхід ще раз.",
+      );
+    if (phase === "error")
+      throw new Error("Вхід виконано, але дані станції не завантажились. Перевірте повідомлення на головному екрані.");
     $("loginStatus").textContent =
       j.monitorWarning ||
       (devices.length === 1
@@ -1264,7 +1273,10 @@ async function login() {
     $("monitorEnabled").checked = monitor.enabled;
   } catch (e) {
     $("loginStatus").className = "login-status bad";
-    $("loginStatus").textContent = e.message;
+    $("loginStatus").textContent =
+      e.stage === "devices" && e.vendorCode === 5032
+        ? "Quectel відхилив щойно отриманий токен (5032). Це не означає, що станція офлайн. Перевірте вхід у Wonderfree і повторіть спробу."
+        : e.message;
   } finally {
     $("password").value = "";
     $("loginBtn").disabled = false;

@@ -1,10 +1,10 @@
-const CACHE = "oukitel-home-static-v3.1.1";
+const CACHE = "oukitel-home-static-v3.1.2";
 const ASSETS = [
   "/",
   "/index.html",
-  "/styles.css?v=3.1.1",
-  "/app.js?v=3.1.1",
-  "/core.mjs?v=3.1.1",
+  "/styles.css?v=3.1.2",
+  "/app.js?v=3.1.2",
+  "/core.mjs?v=3.1.2",
   "/manifest.webmanifest",
   "/icon-192.png",
   "/icon-512.png",

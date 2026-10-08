@@ -83,7 +83,7 @@ export default {
         return json({
           ok: true,
           mode: "cloud-read-only",
-          version: "3.1.1",
+          version: "3.1.2",
           storage: hasD1(env) ? "d1" : "kv-fallback",
           sessionEncryption: !!env.MONITOR_KEY,
         });
@@ -742,7 +742,24 @@ async function cloudGet(path, token, stage = "cloud") {
     const response = await vendorFetch(EU.base + path, {
       headers: cloudHeaders(token),
     });
-    return parseCloud(response, "Помилка Quectel Cloud.", stage);
+    try {
+      return await parseCloud(response, "Помилка Quectel Cloud.", stage);
+    } catch (error) {
+      // Different Quectel app builds have used both Authorization formats.
+      // Retry a read only when the gateway explicitly rejects the token;
+      // never retry writes or unrelated vendor failures.
+      if (!(error instanceof CloudError) || error.vendorCode !== 5032)
+        throw error;
+      const rawToken = String(token || "").replace(/^Bearer\s+/i, "");
+      if (!rawToken) throw error;
+      const retry = await vendorFetch(EU.base + path, {
+        headers: {
+          ...cloudHeaders(token),
+          Authorization: `Bearer ${rawToken}`,
+        },
+      });
+      return parseCloud(retry, "Помилка Quectel Cloud.", stage);
+    }
   } catch (error) {
     if (error instanceof CloudError && !error.stage) error.stage = stage;
     throw error;

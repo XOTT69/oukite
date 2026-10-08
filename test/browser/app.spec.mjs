@@ -155,6 +155,30 @@ test("expired auth prompts login without inventing battery data", async ({
   await expect(page.locator("#statusText")).toHaveText("Потрібен вхід");
   await expect(page.locator("#soc")).toHaveText("—");
   await expect(page.locator("#connectBtn")).toBeVisible();
+  await page.locator("#connectBtn").click();
+  await expect(page.locator("#loginStatus")).toContainText("Введіть email і пароль Wonderfree");
+});
+test("re-login refreshes the dashboard without a second save step", async ({ page }) => {
+  await setup(page, { stateError: 401 });
+  await expect(page.locator("#statusText")).toHaveText("Потрібен вхід");
+  await page.route("**/api/login", (route) => route.fulfill({ json: { accountId, devices: [device] } }));
+  await page.route("**/api/state?**", (route) => route.fulfill({
+    json: {
+      data: { customizeTslInfo: [
+        { abId: 1, resourceValce: 72 },
+        { abId: 4, resourceValce: 0 },
+        { abId: 5, resourceValce: 40 },
+      ] },
+      connection: { online: true, receivedAt: Date.now(), reportedAt: null },
+    },
+  }));
+  await page.locator("#connectBtn").click();
+  await page.locator("#email").fill("owner@example.com");
+  await page.locator("#password").fill("example-password");
+  await page.locator("#loginBtn").click();
+  await expect(page.locator("#statusText")).toHaveText("Станція онлайн");
+  await expect(page.locator("#soc")).toHaveText("72%");
+  await expect(page.locator("#loginStatus")).toContainText("Станцію підключено");
 });
 test("offline cached 89 becomes 100 only after a new online cloud reading", async ({
   page,

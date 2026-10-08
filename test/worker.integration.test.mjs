@@ -255,6 +255,25 @@ test("vendor auth codes including expired token 5032 require login, not offline"
     console.error = originalError;
   }
 });
+test("read-only device discovery retries Bearer format if raw token is rejected", async () => {
+  const original = globalThis.fetch;
+  const { env, headers } = await monitorFixture();
+  const seen = [];
+  globalThis.fetch = async (_url, options) => {
+    seen.push(options.headers.Authorization);
+    return options.headers.Authorization === "Bearer fixture-token"
+      ? json({ code: 0, data: { list: [{ productKey: "p11wN7", deviceKey: "device_test_001" }] } })
+      : json({ code: 5032 });
+  };
+  try {
+    const response = await worker.fetch(request("/api/devices", { headers }), env);
+    assert.equal(response.status, 200);
+    assert.deepEqual(seen, ["fixture-token", "Bearer fixture-token"]);
+    assert.equal((await response.json()).devices.length, 1);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
 test("cloud errors identify the failing read without exposing vendor text", async () => {
   const original = globalThis.fetch, originalError = console.error;
   const { env, headers } = await monitorFixture();
