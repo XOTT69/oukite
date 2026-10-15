@@ -173,3 +173,18 @@ export function mapAttrs(payload, previous) {
     if (byId[id] != null) out[key] = bool(id);
   return out;
 }
+
+
+// A cloud response is not necessarily a live reading. Reject empty payloads
+// rather than stamping their arrival time onto previously displayed values.
+export function hasTelemetrySnapshot(payload) {
+  const attrs =
+    payload?.data?.customizeTslInfo ?? payload?.customizeTslInfo;
+  return Array.isArray(attrs) &&
+    attrs.some((item) =>
+      ["1", "4", "5"].includes(String(item.abId)) &&
+      item.resourceValce != null &&
+      item.resourceValce !== "" &&
+      Number.isFinite(Number(item.resourceValce)),
+    );
+}

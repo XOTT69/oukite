@@ -6,6 +6,7 @@ import {
   flowSummary,
   fmtMin,
   freshLabel,
+  hasTelemetrySnapshot,
   historyStats,
   mapAttrs,
 } from "/core.mjs";
@@ -335,17 +336,17 @@ function conn() {
   }
   $("statusText").textContent = on
     ? stale
-      ? "Дані застаріли"
-      : "Підключено · онлайн"
-    : "Станція офлайн";
+      ? "Cloud давно не перевірено"
+      : "Cloud онлайн"
+    : "Станція офлайн за даними Cloud";
   $("connectionTitle").textContent = on
-    ? "Станція підключена й онлайн"
+    ? "Станція онлайн за даними Cloud"
     : "Cloud підключено, станція офлайн";
   $("connectionCopy").textContent = on
     ? monitor.enabled
-      ? "LIVE — кожні 30 секунд; фоновий збір — кожні 5 хвилин."
-      : "Дані синхронізуються кожні 30 секунд."
-    : "Перевірте живлення, Wi‑Fi та інтернет станції.";
+      ? "Запит Cloud кожні 30 с; фоновий збір — кожні 5 хв. Свіжість даних залежить від станції."
+      : "Запит Cloud кожні 30 секунд. Час вимірювання станцією не підтверджений."
+    : "Перевірте Wi‑Fi та інтернет станції. Навіть після запиту Cloud значення можуть бути старими.";
 }
 function render() {
   const d = chosen(),
@@ -370,7 +371,11 @@ function render() {
       ? "Показано останні успішно отримані дані."
       : "Підключіть Wonderfree, щоб побачити реальні дані.";
   $("updatedShort").textContent =
-    cloud() && state.updated ? freshLabel(state.updated) : "демо";
+    cloud() && state.updated
+      ? "Cloud перевірено " + freshLabel(state.updated)
+      : cloud()
+        ? "Cloud ще не перевірено"
+        : "демо";
   $("remaining").textContent = fmtMin(state.remain);
   $("remainingDetail").textContent =
     state.remain != null ? "за оцінкою станції" : "потрібні LIVE-дані";
@@ -735,25 +740,32 @@ async function refresh({ forceDevices = false } = {}) {
     $("refreshBtn").textContent = "Оновлення…";
     try {
       await devicesLoad({ force: forceDevices });
-      if (!online()) {
-        await loadMonitor({ force: forceDevices });
-        banner("Cloud підключено, але станція офлайн. Показано останні дані.");
+      const d = chosen();
+      if (!d) {
+        banner("Оберіть станцію в налаштуваннях.");
         render();
         return;
       }
-      const d = chosen(),
-        j = await api(
-          "/state?" +
-            new URLSearchParams({ pk: d.productKey, dk: d.deviceKey }),
-        );
+      // The vendor online flag may be stale; always request the shadow.
+      // A successful cloud request does not prove device telemetry is fresh.
+      const j = await api(
+        "/state?" +
+          new URLSearchParams({ pk: d.productKey, dk: d.deviceKey }),
+      );
+      if (!hasTelemetrySnapshot(j))
+        throw Error("Хмара не повернула показників станції.");
       state = { ...mapAttrs(j, state), updated: new Date() };
       record();
       await loadMonitor({ force: forceDevices });
       await lowAlert();
-      banner("");
+      banner(
+        online()
+          ? ""
+          : "Cloud позначає станцію офлайн. Отримані значення можуть бути застарілими.",
+      );
       render();
     } catch (e) {
-      banner("LIVE недоступний: " + e.message + ". Показано останні дані.");
+      banner("Не вдалося перевірити Cloud: " + e.message + ". Показано останні доступні дані.");
       render();
     } finally {
       $("refreshBtn").textContent = "Оновити";
@@ -1066,19 +1078,21 @@ function bind() {
       toast("Виміряне середнє для «" + load.name + "» збережено.");
     }
   };
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) refresh();
-  });
-  window.addEventListener("focus", refresh);
+  let lastForegroundRefreshAt = 0;
+  const refreshOnForeground = () => {
+    if (document.hidden || Date.now() - lastForegroundRefreshAt < 3000) return;
+    lastForegroundRefreshAt = Date.now();
+    refresh({ forceDevices: true });
+  };
+  document.addEventListener("visibilitychange", refreshOnForeground);
+  window.addEventListener("focus", refreshOnForeground);
 }
 bind();
 if ("serviceWorker" in navigator)
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 render();
 if (settings.mode === "cloud")
-  devicesLoad()
-    .then(refresh)
-    .catch(() => banner("Сесію завершено. Увійдіть знову."));
+  refresh({ forceDevices: true });
 setInterval(() => {
   if (!document.hidden) refresh();
 }, 30000);

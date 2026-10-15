@@ -42,3 +42,17 @@ test("PWA exposes adaptive planning and an explicit background-monitor opt-in", 
   assert.match(html, /id="monitorEnabled"/);
   assert.match(html, /data-range="168"/);
 });
+
+
+test("foreground and offline cloud refresh are not blocked by the vendor online flag", async () => {
+  const app = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = app.indexOf("async function refresh(");
+  const end = app.indexOf("async function login()", start);
+  const refresh = app.slice(start, end);
+  assert.ok(start > 0 && end > start);
+  assert.match(refresh, /await devicesLoad\(\{ force: forceDevices \}\)/);
+  assert.match(refresh, /hasTelemetrySnapshot\(j\)/);
+  assert.doesNotMatch(refresh, /if \(!online\(\)\)\s*\{/);
+  assert.match(app, /refresh\(\{ forceDevices: true \}\)/);
+  assert.match(app, /Cloud перевірено/);
+});

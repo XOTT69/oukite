@@ -7,6 +7,7 @@ import {
   calcEnergy,
   flowSummary,
   fmtMin,
+  hasTelemetrySnapshot,
   historyStats,
   mapAttrs,
 } from "../public/core.mjs";
@@ -142,4 +143,22 @@ test("worker applies security headers to static assets and rejects static writes
     env,
   );
   assert.equal(writeResponse.status, 405);
+});
+
+
+test("empty or malformed cloud shadows are not treated as new readings", () => {
+  assert.equal(hasTelemetrySnapshot({ data: { customizeTslInfo: [] } }), false);
+  assert.equal(hasTelemetrySnapshot({ code: 0, data: {} }), false);
+  assert.equal(
+    hasTelemetrySnapshot({
+      data: { customizeTslInfo: [{ abId: 1, resourceValce: "73" }] },
+    }),
+    true,
+  );
+  assert.equal(
+    hasTelemetrySnapshot({
+      data: { customizeTslInfo: [{ abId: 1, resourceValce: "" }] },
+    }),
+    false,
+  );
 });
