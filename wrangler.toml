@@ -2,13 +2,18 @@ name = "oukitel-home"
 main = "worker.js"
 compatibility_date = "2026-09-01"
 
+# Intentionally disabled at user request (2026-10-18).
+# Do not enable a workers.dev route or background schedules on deployment.
+workers_dev = false
+
 [assets]
 directory = "./public"
 binding = "ASSETS"
 run_worker_first = true
 
 [triggers]
-crons = ["* * * * *"]
+# Explicit [] removes previously deployed cron triggers on the next deploy.
+crons = []
 
 [[kv_namespaces]]
 binding = "SESSIONS"
