@@ -1206,13 +1206,13 @@ export { md5hexCorrect };
 // 192.168.x.x address or a self-signed certificate will not work.
 const CONTROL_ENTITIES = { ac: "HA_ENTITY_AC", usb: "HA_ENTITY_USB", dc: "HA_ENTITY_DC" };
 function controlConfig(env) {
-  const url = String(env.HA_URL || "").replace(/\\/$/, "");
-  if (!/^https:\\/\\/[^/?#]+$/i.test(url)) return null;
+  const url = String(env.HA_URL || "").replace(/\/$/, "");
+  if (!/^https:\/\/[^/?#]+$/i.test(url)) return null;
   const token = String(env.HA_TOKEN || "");
   if (!token) return null;
   const entities = Object.fromEntries(
     Object.entries(CONTROL_ENTITIES)
-      .filter(([, key]) => /^switch\\.[a-z0-9_]+$/.test(String(env[key] || "")))
+      .filter(([, key]) => /^switch\.[a-z0-9_]+$/.test(String(env[key] || "")))
       .map(([port, key]) => [port, String(env[key])]),
   );
   return { url, token, entities };
