@@ -2,9 +2,9 @@ name = "oukitel-home"
 main = "worker.js"
 compatibility_date = "2026-09-01"
 
-# Intentionally disabled at user request (2026-10-18).
-# Do not enable a workers.dev route or background schedules on deployment.
-workers_dev = false
+# Enable the default HTTPS *.workers.dev address for the PWA.
+# Scheduled triggers remain disabled until background monitoring is configured.
+workers_dev = true
 
 [assets]
 directory = "./public"
