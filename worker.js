@@ -66,6 +66,10 @@ export default {
         return await configureMonitor(request, env, session);
       if (url.pathname === "/api/monitor/history" && request.method === "GET")
         return await monitorHistory(request, env, url, session);
+      if (url.pathname === "/api/control/status" && request.method === "GET")
+        return await controlStatus(env);
+      if (url.pathname === "/api/control" && request.method === "POST")
+        return await controlWrite(request, env, session);
       if (url.pathname === "/api/state" && request.method === "GET")
         return await state(url, session.token);
       if (url.pathname === "/api/tsl" && request.method === "GET")
@@ -1195,3 +1199,90 @@ function md5hexCorrect(input) {
 }
 
 export { md5hexCorrect };
+
+
+// Optional Home Assistant gateway. Cloud control is deliberately NOT used.
+// An HTTPS HA endpoint must be reachable by Cloudflare Workers; a private
+// 192.168.x.x address or a self-signed certificate will not work.
+const CONTROL_ENTITIES = { ac: "HA_ENTITY_AC", usb: "HA_ENTITY_USB", dc: "HA_ENTITY_DC" };
+function controlConfig(env) {
+  const url = String(env.HA_URL || "").replace(/\\/$/, "");
+  if (!/^https:\\/\\/[^/?#]+$/i.test(url)) return null;
+  const token = String(env.HA_TOKEN || "");
+  if (!token) return null;
+  const entities = Object.fromEntries(
+    Object.entries(CONTROL_ENTITIES)
+      .filter(([, key]) => /^switch\\.[a-z0-9_]+$/.test(String(env[key] || "")))
+      .map(([port, key]) => [port, String(env[key])]),
+  );
+  return { url, token, entities };
+}
+async function haRequest(config, path, method = "GET", body) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(config.url + path, {
+      method,
+      headers: { Authorization: "Bearer " + config.token, "Content-Type": "application/json" },
+      body: body == null ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+      redirect: "error",
+    });
+    if (!response.ok) throw new CloudError("Шлюз Home Assistant повернув помилку (" + response.status + ").", 502);
+    return await response.json();
+  } catch (error) {
+    if (error instanceof CloudError) throw error;
+    throw new CloudError("Немає зв’язку із захищеним шлюзом Home Assistant.", 502);
+  } finally { clearTimeout(timeout); }
+}
+async function controlStatus(env) {
+  const config = controlConfig(env);
+  if (!config || !Object.keys(config.entities).length)
+    return json({ available: false, ports: {}, reason: "Шлюз локального керування ще не налаштовано." });
+  const ports = {};
+  await Promise.all(Object.entries(config.entities).map(async ([port, entity]) => {
+    try {
+      const data = await haRequest(config, "/api/states/" + encodeURIComponent(entity));
+      ports[port] = {
+        available: ["on", "off"].includes(data.state),
+        on: data.state === "on",
+        updated: data.last_updated || null,
+      };
+    } catch {
+      ports[port] = { available: false, on: null, updated: null };
+    }
+  }));
+  return json({ available: Object.values(ports).some(x => x.available), ports });
+}
+async function controlWrite(request, env, session) {
+  const origin = request.headers.get("Origin");
+  if (!origin || origin !== new URL(request.url).origin)
+    return json({ error: "Команду заблоковано: невірне походження запиту." }, 403);
+  const config = controlConfig(env);
+  if (!config) return json({ error: "Шлюз Home Assistant не налаштовано." }, 503);
+  const input = await readJson(request);
+  const port = String(input.port || "");
+  const target = input.on;
+  const entity = Object.hasOwn(CONTROL_ENTITIES, port) ? config.entities[port] : null;
+  if (!entity || typeof target !== "boolean")
+    return json({ error: "Неприпустима команда або вихід не налаштований." }, 400);
+  const productKey = String(input.productKey || ""), deviceKey = String(input.deviceKey || "");
+  if (!validDeviceId(productKey) || !validDeviceId(deviceKey))
+    return json({ error: "Спочатку оберіть свою станцію." }, 400);
+  const owned = (await accountDevices(session.token)).some(
+    d => d.productKey === productKey && d.deviceKey === deviceKey
+  );
+  if (!owned) return json({ error: "Немає доступу до цієї станції." }, 403);
+  // Before writing, make sure HA exposes an actual writable switch.
+  const before = await haRequest(config, "/api/states/" + encodeURIComponent(entity));
+  if (!["on", "off"].includes(before.state))
+    return json({ error: "Вихід недоступний у Home Assistant." }, 409);
+  if ((before.state === "on") !== target) {
+    await haRequest(config, "/api/services/switch/" + (target ? "turn_on" : "turn_off"),
+      "POST", { entity_id: entity });
+  }
+  const after = await haRequest(config, "/api/states/" + encodeURIComponent(entity));
+  const confirmed = (after.state === "on") === target && ["on", "off"].includes(after.state);
+  return json({ confirmed, port, on: after.state === "on", updated: after.last_updated || null },
+    confirmed ? 200 : 409);
+}

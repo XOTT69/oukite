@@ -358,8 +358,8 @@
           <p class="eyebrow">ВИХОДИ СТАНЦІЇ</p>
           <h2>Статус і керування</h2>
           <p>
-            OUKITEL Home показує стан портів. Для перемикання AC, USB і DC
-            використовуйте Wonderfree.
+            Стан портів оновлюється з хмари. Команди AC, USB і DC доступні
+            через налаштований захищений локальний шлюз Home Assistant.
           </p>
         </section>
         <section class="card control-hero">
@@ -367,32 +367,33 @@
           <div>
             <h2>Безпечна схема</h2>
             <p>
-              Цей застосунок не надсилає неперевірені cloud-команди і не може
-              випадково вимкнути живлення.
+              Перемикання доступне лише через перевірені локальні switch-сутності.
+              Перед кожною дією потрібне підтвердження. Вимкнення AC може знеструмити прилади.
             </p>
           </div>
         </section>
         <section class="card controls-list">
           <div class="section-top">
             <div>
-              <h2>Останній відомий стан</h2>
+              <h2>Виходи та керування</h2>
               <p id="controlDataState">Показано останній відомий стан</p>
+              <p id="gatewayStatus" aria-live="polite">Перевіряємо шлюз керування…</p>
             </div>
           </div>
           <div class="control-row">
             <svg class="icon"><use href="#i-ac" /></svg>
             <div><b>AC 230 V</b><small id="acControlCopy">—</small></div>
-            <i class="switch" id="acSwitch"></i>
+            <button type="button" class="switch control-button" id="acSwitch" data-control="ac" aria-label="Перемкнути AC" aria-pressed="false" disabled></button>
           </div>
           <div class="control-row">
             <svg class="icon"><use href="#i-usb" /></svg>
             <div><b>USB</b><small id="usbControlCopy">—</small></div>
-            <i class="switch" id="usbSwitch"></i>
+            <button type="button" class="switch control-button" id="usbSwitch" data-control="usb" aria-label="Перемкнути USB" aria-pressed="false" disabled></button>
           </div>
           <div class="control-row">
             <svg class="icon"><use href="#i-dc" /></svg>
             <div><b>DC</b><small id="dcControlCopy">—</small></div>
-            <i class="switch" id="dcSwitch"></i>
+            <button type="button" class="switch control-button" id="dcSwitch" data-control="dc" aria-label="Перемкнути DC" aria-pressed="false" disabled></button>
           </div>
         </section>
         <section class="card instruction-card">
@@ -400,8 +401,8 @@
           <div>
             <h2>Як перемкнути вихід</h2>
             <p>
-              Відкрийте Wonderfree → оберіть P2001E Plus → натисніть AC, USB або
-              DC. Тут стан оновиться після наступної синхронізації.
+              Якщо локальний шлюз не підключений, відкрийте Wonderfree.
+              Для керування тут налаштуйте Home Assistant і серверні секрети згідно з README.
             </p>
           </div>
         </section>

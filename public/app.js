@@ -197,7 +197,9 @@ let state = { ...DEMO },
   lastOnline = null,
   timer = 0,
   monitor = { enabled: false, state: "disabled" },
-  lastMonitorLoad = 0;
+  lastMonitorLoad = 0,
+  gateway = { available: false, ports: {} },
+  controlPending = false;
 const cloud = () => settings.mode === "cloud" && !!chosen(),
   chosen = () =>
     (settings.device &&
@@ -416,9 +418,16 @@ function render() {
     $(k + "State").textContent = yes(state[k]);
     $(k + "Tile").classList.toggle("on", !!state[k]);
     $(k + "ControlCopy").textContent =
-      yes(state[k]) + " · перемикається у Wonderfree";
-    $(k + "Switch").classList.toggle("on", !!state[k]);
+      yes(state[k]) + (gateway.ports?.[k]?.available ? " · локальне керування" : " · керування у Wonderfree");
+    const control = $(k + "Switch");
+    const devicePort = gateway.ports?.[k];
+    control.classList.toggle("on", devicePort?.available ? devicePort.on : !!state[k]);
+    control.disabled = !cloud() || !online() || !devicePort?.available || controlPending;
+    control.setAttribute("aria-pressed", String(devicePort?.available ? devicePort.on : !!state[k]));
   }
+  $("gatewayStatus").textContent = gateway.available
+    ? "Локальний шлюз доступний · для кожної команди потрібне підтвердження"
+    : "Локальне керування недоступне · скористайтеся Wonderfree";
   $("controlDataState").textContent = cloud()
     ? "Остання синхронізація: " + freshLabel(state.updated)
     : "Показано демо-стан";
@@ -874,7 +883,51 @@ function restore(file) {
   };
   r.readAsText(file);
 }
+async function refreshGateway() {
+  if (!cloud()) {
+    gateway = { available: false, ports: {} };
+    render();
+    return;
+  }
+  try {
+    gateway = await api("/control/status");
+  } catch {
+    gateway = { available: false, ports: {} };
+  }
+  render();
+}
+async function togglePort(port) {
+  const current = gateway.ports?.[port];
+  if (controlPending || !cloud() || !online() || !current?.available) return;
+  const on = !current.on;
+  if (!confirmAction((on ? "Увімкнути " : "Вимкнути ") + port.toUpperCase()
+    + "? Вимкнення живлення може зупинити підключені пристрої.")) return;
+  controlPending = true;
+  render();
+  try {
+    const d = chosen();
+    const result = await api("/control", {
+      method: "POST",
+      body: JSON.stringify({ port, on, productKey: d.productKey, deviceKey: d.deviceKey }),
+    });
+    if (!result.confirmed) throw Error("Стан не підтверджено.");
+    gateway.ports[port] = { available: true, on: result.on, updated: result.updated };
+    activity = [{ at: Date.now(), text: port.toUpperCase() + ": " + yes(on) + " (локальний шлюз)" }, ...activity].slice(0, 32);
+    save();
+    toast(port.toUpperCase() + ": команда підтверджена шлюзом");
+    await refresh({ forceDevices: false });
+  } catch(e) {
+    toast("Не вдалося змінити " + port.toUpperCase() + ": " + e.message);
+    await refreshGateway();
+  } finally {
+    controlPending = false;
+    render();
+  }
+}
 function bind() {
+  document.querySelectorAll("[data-control]").forEach(x => {
+    x.onclick = () => togglePort(x.dataset.control);
+  });
   $("settingsBtn").onclick = settingsOpen;
   $("refreshBtn").onclick = () => refresh({ forceDevices: true });
   document
@@ -1088,6 +1141,8 @@ function bind() {
   window.addEventListener("focus", refreshOnForeground);
 }
 bind();
+refreshGateway();
+setInterval(() => { if (document.visibilityState === "visible" && cloud()) refreshGateway(); }, 30000);
 if ("serviceWorker" in navigator)
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 render();
