@@ -1270,7 +1270,8 @@ async function controlWrite(request, env, session) {
   const input = await readJson(request);
   const port = String(input.port || "");
   const target = input.on;
-  const entity = Object.hasOwn(CONTROL_ENTITIES, port) ? config.entities[port] : null;
+  const entity = config && Object.hasOwn(CONTROL_ENTITIES, port)
+    ? config.entities[port] : null;
   if (!Object.hasOwn(CONTROL_ENTITIES, port) || typeof target !== "boolean")
     return json({ error: "Неприпустима команда." }, 400);
   const productKey = String(input.productKey || ""), deviceKey = String(input.deviceKey || "");
