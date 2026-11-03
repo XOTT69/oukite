@@ -199,7 +199,8 @@ let state = { ...DEMO },
   monitor = { enabled: false, state: "disabled" },
   lastMonitorLoad = 0,
   gateway = { available: false, ports: {} },
-  controlPending = false;
+  controlPending = false,
+  lastWake = 0;
 const cloud = () => settings.mode === "cloud" && !!chosen(),
   chosen = () =>
     (settings.device &&
@@ -339,7 +340,7 @@ function conn() {
   $("statusText").textContent = on
     ? stale
       ? "Cloud давно не перевірено"
-      : "Cloud онлайн"
+      : "Cloud перевірено · свіжість виміру невідома"
     : "Станція офлайн за даними Cloud";
   $("connectionTitle").textContent = on
     ? "Станція онлайн за даними Cloud"
@@ -418,7 +419,9 @@ function render() {
     $(k + "State").textContent = yes(state[k]);
     $(k + "Tile").classList.toggle("on", !!state[k]);
     $(k + "ControlCopy").textContent =
-      yes(state[k]) + (gateway.ports?.[k]?.available ? " · локальне керування" : " · керування у Wonderfree");
+      yes(state[k]) + (gateway.ports?.[k]?.available
+        ? gateway.ports[k].source === "cloud" ? " · керування через Cloud" : " · локальний шлюз"
+        : " · стан недоступний");
     const control = $(k + "Switch");
     const devicePort = gateway.ports?.[k];
     control.classList.toggle("on", devicePort?.available ? devicePort.on : !!state[k]);
@@ -426,8 +429,10 @@ function render() {
     control.setAttribute("aria-pressed", String(devicePort?.available ? devicePort.on : !!state[k]));
   }
   $("gatewayStatus").textContent = gateway.available
-    ? "Локальний шлюз доступний · для кожної команди потрібне підтвердження"
-    : "Локальне керування недоступне · скористайтеся Wonderfree";
+    ? gateway.mode === "cloud"
+      ? "Cloud-керування · виконання перевіряється за отриманим станом"
+      : "Локальний шлюз · підтверджуйте команди перед перемиканням"
+    : "Керування недоступне · перевірте з’єднання станції";
   $("controlDataState").textContent = cloud()
     ? "Остання синхронізація: " + freshLabel(state.updated)
     : "Показано демо-стан";
@@ -755,8 +760,19 @@ async function refresh({ forceDevices = false } = {}) {
         render();
         return;
       }
-      // The vendor online flag may be stale; always request the shadow.
-      // A successful cloud request does not prove device telemetry is fresh.
+      // Ask the vendor to enable high-frequency Wi-Fi reporting on every
+      // fresh PWA session. This is best effort: firmware can ignore the command.
+      if (online() && Date.now() - lastWake > 65000) {
+        lastWake = Date.now();
+        try {
+          const wake = await api("/wake", { method: "POST",
+            body: JSON.stringify({ productKey: d.productKey, deviceKey: d.deviceKey }) });
+          if (wake.requested) await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+          console.warn("Telemetry reporting request:", error.message);
+        }
+      }
+      // Vendor cloud shadow may still contain old values after this request.
       const j = await api(
         "/state?" +
           new URLSearchParams({ pk: d.productKey, dk: d.deviceKey }),
@@ -765,6 +781,7 @@ async function refresh({ forceDevices = false } = {}) {
         throw Error("Хмара не повернула показників станції.");
       state = { ...mapAttrs(j, state), updated: new Date() };
       record();
+      if (!controlPending) refreshGateway().catch(() => {});
       await loadMonitor({ force: forceDevices });
       await lowAlert();
       banner(
@@ -890,7 +907,10 @@ async function refreshGateway() {
     return;
   }
   try {
-    gateway = await api("/control/status");
+    const d = chosen();
+    gateway = d ? await api("/control/status?" +
+      new URLSearchParams({ pk: d.productKey, dk: d.deviceKey }))
+      : { available: false, ports: {} };
   } catch {
     gateway = { available: false, ports: {} };
   }
@@ -910,12 +930,19 @@ async function togglePort(port) {
       method: "POST",
       body: JSON.stringify({ port, on, productKey: d.productKey, deviceKey: d.deviceKey }),
     });
-    if (!result.confirmed) throw Error("Стан не підтверджено.");
-    gateway.ports[port] = { available: true, on: result.on, updated: result.updated };
-    activity = [{ at: Date.now(), text: port.toUpperCase() + ": " + yes(on) + " (локальний шлюз)" }, ...activity].slice(0, 32);
+    if (!result.accepted && !result.confirmed) throw Error("Команду не прийнято.");
+    if (result.confirmed) {
+      gateway.ports[port] = { ...gateway.ports[port], available: true,
+        on: result.on, updated: result.updated };
+    }
+    activity = [{ at: Date.now(), text: port.toUpperCase() + ": " +
+      (result.confirmed ? "підтверджено " + yes(on) : "команду прийнято, очікуємо підтвердження") },
+      ...activity].slice(0, 32);
     save();
-    toast(port.toUpperCase() + ": команда підтверджена шлюзом");
-    await refresh({ forceDevices: false });
+    toast(result.confirmed ? port.toUpperCase() + ": стан підтверджено" :
+      "Команду надіслано, але виконання ще не підтверджено.");
+    await refresh({ forceDevices: true });
+    await refreshGateway();
   } catch(e) {
     toast("Не вдалося змінити " + port.toUpperCase() + ": " + e.message);
     await refreshGateway();

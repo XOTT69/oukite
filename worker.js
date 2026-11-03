@@ -67,7 +67,9 @@ export default {
       if (url.pathname === "/api/monitor/history" && request.method === "GET")
         return await monitorHistory(request, env, url, session);
       if (url.pathname === "/api/control/status" && request.method === "GET")
-        return await controlStatus(env);
+        return await controlStatus(env, session, url);
+      if (url.pathname === "/api/wake" && request.method === "POST")
+        return await wakeDevice(request, env, session);
       if (url.pathname === "/api/control" && request.method === "POST")
         return await controlWrite(request, env, session);
       if (url.pathname === "/api/state" && request.method === "GET")
@@ -1235,10 +1237,11 @@ async function haRequest(config, path, method = "GET", body) {
     throw new CloudError("Немає зв’язку із захищеним шлюзом Home Assistant.", 502);
   } finally { clearTimeout(timeout); }
 }
-async function controlStatus(env) {
+async function controlStatus(env, session, url) {
+  const device = await allowedDevice(url, session.token);
   const config = controlConfig(env);
   if (!config || !Object.keys(config.entities).length)
-    return json({ available: false, ports: {}, reason: "Шлюз локального керування ще не налаштовано." });
+    return cloudControlStatus(device, session.token);
   const ports = {};
   await Promise.all(Object.entries(config.entities).map(async ([port, entity]) => {
     try {
@@ -1252,20 +1255,24 @@ async function controlStatus(env) {
       ports[port] = { available: false, on: null, updated: null };
     }
   }));
-  return json({ available: Object.values(ports).some(x => x.available), ports });
+  if (!Object.values(ports).some(x => x.available))
+    return cloudControlStatus(device, session.token);
+  const cloudStatus = await cloudControlStatus(device, session.token, true);
+  for (const port of ["ac", "usb", "dc"])
+    if (!ports[port]?.available) ports[port] = cloudStatus.ports[port];
+  return json({ available: true, mode: "hybrid", ports });
 }
 async function controlWrite(request, env, session) {
   const origin = request.headers.get("Origin");
   if (!origin || origin !== new URL(request.url).origin)
     return json({ error: "Команду заблоковано: невірне походження запиту." }, 403);
   const config = controlConfig(env);
-  if (!config) return json({ error: "Шлюз Home Assistant не налаштовано." }, 503);
   const input = await readJson(request);
   const port = String(input.port || "");
   const target = input.on;
   const entity = Object.hasOwn(CONTROL_ENTITIES, port) ? config.entities[port] : null;
-  if (!entity || typeof target !== "boolean")
-    return json({ error: "Неприпустима команда або вихід не налаштований." }, 400);
+  if (!Object.hasOwn(CONTROL_ENTITIES, port) || typeof target !== "boolean")
+    return json({ error: "Неприпустима команда." }, 400);
   const productKey = String(input.productKey || ""), deviceKey = String(input.deviceKey || "");
   if (!validDeviceId(productKey) || !validDeviceId(deviceKey))
     return json({ error: "Спочатку оберіть свою станцію." }, 400);
@@ -1273,6 +1280,7 @@ async function controlWrite(request, env, session) {
     d => d.productKey === productKey && d.deviceKey === deviceKey
   );
   if (!owned) return json({ error: "Немає доступу до цієї станції." }, 403);
+  if (!config || !entity) return cloudControl(session.token, { productKey, deviceKey, port, on: target });
   // Before writing, make sure HA exposes an actual writable switch.
   const before = await haRequest(config, "/api/states/" + encodeURIComponent(entity));
   if (!["on", "off"].includes(before.state))
@@ -1285,4 +1293,133 @@ async function controlWrite(request, env, session) {
   const confirmed = (after.state === "on") === target && ["on", "off"].includes(after.state);
   return json({ confirmed, port, on: after.state === "on", updated: after.last_updated || null },
     confirmed ? 200 : 409);
+}
+
+
+const CLOUD_OUTPUTS = Object.freeze({
+  ac: { code: "ac_switch", id: "43" },
+  usb: { code: "usb_switch", id: "44" },
+  dc: { code: "dc_switch", id: "46" },
+});
+function cloudValue(snapshot, id) {
+  const attrs = snapshot?.data?.customizeTslInfo || snapshot?.customizeTslInfo;
+  if (!Array.isArray(attrs)) return null;
+  const item = attrs.find((entry) => String(entry.abId) === id);
+  if (!item || item.resourceValce == null) return null;
+  const value = String(item.resourceValce).toLowerCase();
+  if (value === "1" || value === "true") return true;
+  if (value === "0" || value === "false") return false;
+  return null;
+}
+async function cloudCommand(token, device, code, value) {
+  // API confirmed by external reverse-engineering, response only means
+  // accepted by cloud; it does not prove the station has executed the action.
+  return cloudPost("/v2/binding/enduserapi/batchControlDevice", token, {
+    data: JSON.stringify([{ [code]: String(value) }]),
+    deviceList: [{
+      productKey: device.productKey, deviceKey: device.deviceKey,
+      gatewayDeviceKey: "", gatewayProductKey: "",
+    }],
+    type: 2, cacheTime: 86400, isCache: 2, isCover: 2, dataFormat: 2,
+  });
+}
+async function cloudPost(path, token, body) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 9000);
+  try {
+    const response = await fetch(EU.base + path, {
+      method: "POST",
+      headers: { ...cloudHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    return await parseCloud(response, "Cloud не прийняв команду.");
+  } catch (error) {
+    if (error instanceof CloudError) throw error;
+    throw new CloudError("Не вдалося надіслати команду в Cloud.", 502);
+  } finally { clearTimeout(timer); }
+}
+async function cloudControlStatus(device, token, raw = false) {
+  const unavailable = Object.fromEntries(
+    Object.keys(CLOUD_OUTPUTS).map(k => [k, { available: false, on: null }]));
+  if (!device.online) return raw
+    ? { available: false, ports: unavailable, mode: "cloud" }
+    : json({ available: false, ports: unavailable, mode: "cloud", reason: "Станція позначена офлайн." });
+  try {
+    const snapshot = await cloudGet(
+      "/v2/binding/enduserapi/getDeviceBusinessAttributes?pk=" +
+      encodeURIComponent(device.productKey) + "&dk=" + encodeURIComponent(device.deviceKey),
+      token,
+    );
+    const ports = Object.fromEntries(Object.entries(CLOUD_OUTPUTS).map(([port, def]) => {
+      const on = cloudValue(snapshot, def.id);
+      return [port, { available: on !== null, on, source: "cloud", updated: null }];
+    }));
+    const result = { available: Object.values(ports).some(x => x.available), mode: "cloud", ports };
+    return raw ? result : json(result);
+  } catch {
+    const result = { available: false, mode: "cloud", ports: unavailable };
+    return raw ? result : json(result);
+  }
+}
+async function cloudControl(token, input) {
+  const def = CLOUD_OUTPUTS[input.port];
+  if (!def || typeof input.on !== "boolean")
+    return json({ error: "Команда не підтримується." }, 400);
+  const device = (await accountDevices(token)).find(
+    x => x.productKey === input.productKey && x.deviceKey === input.deviceKey,
+  );
+  if (!device || !device.online)
+    return json({ error: "Станція не підтверджена як онлайн. Команду не надіслано." }, 409);
+  const snapshotBefore = await cloudGet(
+    "/v2/binding/enduserapi/getDeviceBusinessAttributes?pk=" +
+    encodeURIComponent(device.productKey) + "&dk=" + encodeURIComponent(device.deviceKey),
+    token,
+  );
+  const before = cloudValue(snapshotBefore, def.id);
+  if (before === null)
+    return json({ error: "Немає достовірного стану цього виходу. Команду не надіслано." }, 409);
+  if (before === input.on)
+    return json({ accepted: true, confirmed: false, on: before, port: input.port,
+      message: "Cloud уже показує цей стан; нової команди не надіслано." });
+  await cloudCommand(token, device, def.code, input.on ? "true" : "false");
+  // Never equate cloud acknowledgement with a confirmed physical switch.
+  let after = before;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    const shadow = await cloudGet(
+      "/v2/binding/enduserapi/getDeviceBusinessAttributes?pk=" +
+      encodeURIComponent(device.productKey) + "&dk=" + encodeURIComponent(device.deviceKey),
+      token,
+    );
+    const value = cloudValue(shadow, def.id);
+    if (value != null) after = value;
+    if (after === input.on) break;
+  }
+  const confirmed = after === input.on;
+  return json({ accepted: true, confirmed, on: after, port: input.port,
+    message: confirmed ? "Cloud повідомляє потрібний стан." :
+      "Cloud прийняв команду, але станція ще не підтвердила виконання." });
+}
+async function wakeDevice(request, env, session) {
+  const origin = request.headers.get("Origin");
+  if (!origin || origin !== new URL(request.url).origin)
+    return json({ error: "Недозволене походження запиту." }, 403);
+  const body = await readJson(request);
+  const pk = String(body.productKey || ""), dk = String(body.deviceKey || "");
+  if (!validDeviceId(pk) || !validDeviceId(dk))
+    return json({ error: "Невірний пристрій." }, 400);
+  const device = (await accountDevices(session.token)).find(
+    d => d.productKey === pk && d.deviceKey === dk,
+  );
+  if (!device) return json({ error: "Немає доступу до пристрою." }, 403);
+  if (!device.online) return json({ requested: false, reason: "Станція офлайн." });
+  const key = "wake:" + await sha256hex(session.accountId + ":" + pk + ":" + dk);
+  const existing = await env.SESSIONS.get(key);
+  if (existing) return json({ requested: false, reason: "Нещодавно активовано." });
+  // A vendor-defined telemetry-frequency switch, not an output relay.
+  // Best-effort: reporting frequency may time out or be ignored by firmware.
+  await cloudCommand(session.token, device, "high_frequency_reporting", "2");
+  await env.SESSIONS.put(key, "1", { expirationTtl: 65 });
+  return json({ requested: true, reason: "Запит частішої телеметрії передано в Cloud." });
 }
